@@ -338,17 +338,17 @@ R2c                   = input.float (    4     , title= ':'   , minval=.2, step=
  
 //Colors
 cBBplusA              = input.color (color.rgb(12, 181, 26, 93)
-                                               , title='      '                    , inline='bl' , group='Colours    +BB                   Last Swings'  )
+                                               , title='      '                    , inline='bl' , group='Breaker Blocks    +BB                   Last Swings'  )
 cBBplusB              = input.color (color.rgb(12, 181, 26, 85)
-                                               , title=''                          , inline='bl' , group='Colours    +BB                   Last Swings'  )
+                                               , title=''                          , inline='bl' , group='Breaker Blocks    +BB                   Last Swings'  )
 cSwingBl              = input.color (color.rgb(255, 82, 82, 85)
-                                               , title='        '                  , inline='bl' , group='Colours    +BB                   Last Swings'  )
+                                               , title='        '                  , inline='bl' , group='Breaker Blocks    +BB                   Last Swings'  )
 cBB_minA              = input.color (color.rgb(255, 17, 0, 95)
-                                               , title='      '                    , inline='br' , group='Colours    -BB                   Last Swings'  )
+                                               , title='      '                    , inline='br' , group='Breaker Blocks    -BB                   Last Swings'  )
 cBB_minB              = input.color (color.rgb(255, 17, 0, 85)
-                                               , title=''                          , inline='br' , group='Colours    -BB                   Last Swings'  )
+                                               , title=''                          , inline='br' , group='Breaker Blocks    -BB                   Last Swings'  )
 cSwingBr              = input.color (color.rgb(0, 137, 123, 85)
-                                               , title='        '                  , inline='br' , group='Colours    -BB                   Last Swings'  )
+                                               , title='        '                  , inline='br' , group='Breaker Blocks    -BB                   Last Swings'  )
 
 _arrowup = '▲'
 _arrowdn = '▼'
@@ -1689,4 +1689,6 @@ if barstate.islast
         update_table(stats, 5, 8, use_s7, s7, s7m_h, s7m_l, s7m_c, s7m_highs, s7m_lows)
         update_table(stats, 5, 9, use_s8, s8, s8m_h, s8m_l, s8m_c, s8m_highs, s8m_lows)
 // ------------------------------ Dashboard ------------------------------
+
+
 
