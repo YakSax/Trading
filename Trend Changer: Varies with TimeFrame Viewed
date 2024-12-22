@@ -1,7 +1,7 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 
 //@version=6
-indicator("Trend Changer", overlay=true)
+indicator("Trend Changer: Varies with TimeFrame Viewed", overlay=true)
 // Input for choosing the moving average type
 maType = input.string(title="MA Type", defval="SMA", options=["SMA", "EMA", "WMA", "VWMA"],tooltip="Select the type of moving average")
 // Input for setting the moving average length
