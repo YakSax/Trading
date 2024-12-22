@@ -1,0 +1,64 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yak_Sax
+
+//@version=6
+indicator("Trend Changer with Custom Timeframe", overlay=true)
+
+// Input for choosing the moving average type
+maType = input.string(title="MA Type", defval="SMA", options=["SMA", "EMA", "WMA", "VWMA"], tooltip="Select the type of moving average")
+
+// Input for setting the moving average length
+length = input.int(title="MA Length", defval=5, minval=1, tooltip="Set the length of the moving average")
+
+// Input for color customization
+colorGreen = input.color(title="Color Above and Inclining", defval=color.new(#00FF00, 20)) // Green
+colorRed = input.color(title="Color Below and Declining", defval=color.new(#FF0000, 20)) // Red
+colorYellow = input.color(title="Color for Flat or Diverging", defval=color.new(#FFFF00, 20)) // Yellow
+
+// Input for MA color customization
+maColor = input.color(title="MA Color", defval=color.new(#800080, 0)) // Default to purple
+
+// Input for opacity customization
+opacityGreen = input.int(title="Opacity for Above and Inclining", defval=20, minval=0, maxval=100)
+opacityRed = input.int(title="Opacity for Below and Declining", defval=20, minval=0, maxval=100)
+opacityYellow = input.int(title="Opacity for Flat or Diverging", defval=20, minval=0, maxval=100)
+
+// Input for selecting the custom timeframe
+timeframe = input.timeframe("D", title="Timeframe for MA", options=["15", "30", "60", "120", "240", "D", "W"])
+
+// Define the moving average calculation function
+maCalculation(maType, length) =>
+    switch maType
+        "SMA" => ta.sma(close, length)
+        "EMA" => ta.ema(close, length)
+        "WMA" => ta.wma(close, length)
+        "VWMA" => ta.vwma(close, length)
+
+// Calculate the moving average based on the selected timeframe
+maOnTimeframe = request.security(syminfo.tickerid, timeframe, maCalculation(maType, length))
+
+// Calculate the slope of the moving average on the selected timeframe
+maPrev = request.security(syminfo.tickerid, timeframe, maCalculation(maType, length)[1])
+slope = maOnTimeframe - maPrev
+
+// Define a small tolerance for flat slope
+tolerance = 0.000001
+
+// Define the conditions for coloring
+isAboveAndInclining = close > maOnTimeframe and slope > tolerance
+isBelowAndDeclining = close < maOnTimeframe and slope < -tolerance
+isYellowCondition = (math.abs(slope) <= tolerance) or (close > maOnTimeframe and slope < -tolerance) or (close < maOnTimeframe and slope > tolerance)
+
+// Plot the moving average without labels on the price scale
+plotMA = plot(maOnTimeframe, title="MA", color=maColor, linewidth=2, display=display.all, trackprice=false)
+
+// Determine colors based on current bar conditions
+currentColor = isAboveAndInclining ? color.new(colorGreen, 100 - opacityGreen) :
+              isBelowAndDeclining ? color.new(colorRed, 100 - opacityRed) :
+              isYellowCondition ? color.new(colorYellow, 100 - opacityYellow) : na
+
+// Assign fill colors based on current conditions
+plotFill = plot(close, color=color.new(currentColor, 0), linewidth=1, style=plot.style_linebr, display=display.none)
+
+// Fill areas between price and moving average based on conditions with custom opacity
+fill(plotFill, plotMA, color=currentColor)
