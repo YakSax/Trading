@@ -86,4 +86,4 @@ if showTable
     table.cell(ftfcTable, 9, 1, arrowM, text_color = color.black, bgcolor = bgM, text_size = txtSize)
 
     [arrow2M, bg2M] = getArrowAndBackground('2M') // Fetch 2M timeframe
-    table.cell(ftfcTable, 10, 1, arrow2M, text_color = color.black, bgcolor = bg2M, text_size = txtSize) // Add 2M data to table
+    table.cell(ftfcTable, 10, 1, arrow2M, text_color = color.black, bgcolor = bg2M, text_size = txtSize)
