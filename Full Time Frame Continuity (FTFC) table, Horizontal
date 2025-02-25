@@ -1,0 +1,89 @@
+// FULL TIME FRAME CONTINUITY TABLE (as part of The STRAT trading Strategy invented by Rob Smith in the early 2010s)
+// @ Sax_Yak
+//@version=6
+
+indicator('FTFC Table, Horizontal', shorttitle = 'FTFC table, Horizontal', overlay = true)
+
+// --- Inputs ---
+showTable = input.bool(true, title = 'Show FTFC Table')
+atrLength = input.int(14, title = 'ATR Length')
+
+// Table Position Selection
+tablePositionInput = input.string('Bottom Right', title = 'Table Position', options = ['Top Left', 'Top Right', 'Bottom Left', 'Bottom Right'])
+
+// Table Size Selection
+tableSizeInput = input.string('Medium', title = 'Table Size', options = ['Small', 'Medium', 'Large'])
+
+// Function to convert user selection into `position` enum
+getTablePosition(pos) =>
+    pos == 'Top Left' ? position.top_left : pos == 'Top Right' ? position.top_right : pos == 'Bottom Left' ? position.bottom_left : position.bottom_right // Default
+
+// Function to convert size selection into `size` enum
+getTextSize(sizeInput) =>
+    sizeInput == 'Small' ? size.small : sizeInput == 'Large' ? size.large : size.normal // Default (Medium)
+
+// --- Function to Get Arrow and Background Color ---
+getArrowAndBackground(tf) =>
+    openPrice = request.security(syminfo.tickerid, tf, open)
+    currentPrice = close
+    upOrDown = currentPrice > openPrice ? '▲' : '▼'
+    bgColor = currentPrice > openPrice ? color.rgb(112, 151, 113) : color.rgb(241, 104, 104, 7)
+    [upOrDown, bgColor]
+
+// --- ATR Calculation (Daily Time Frame) ---
+atrValue = request.security(syminfo.tickerid, 'D', ta.atr(atrLength))
+
+// --- Create Table (User-defined Position) ---
+var table ftfcTable = table.new(position = getTablePosition(tablePositionInput), columns = 11, rows = 2, bgcolor = color.gray)
+
+// Get user-selected text size
+txtSize = getTextSize(tableSizeInput)
+
+// --- Fill Table Headers ---
+if bar_index == 0
+    table.cell(ftfcTable, 0, 0, 'ATR (D)', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 1, 0, '15m', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 2, 0, '30m', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 3, 0, '1H', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 4, 0, '4H', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 5, 0, 'D', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 6, 0, '2D', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 7, 0, 'W', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 8, 0, '2W', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 9, 0, 'M', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize)
+    table.cell(ftfcTable, 10, 0, '2M', text_color = color.black, bgcolor = color.rgb(200, 200, 200), text_size = txtSize) // New 2M Column
+
+// --- Fill Table Values if Enabled ---
+if showTable
+    // ATR Value
+    table.cell(ftfcTable, 0, 1, str.tostring(atrValue, '#.##'), text_color = color.black, bgcolor = color.white, text_size = txtSize)
+
+    [arrow15, bg15] = getArrowAndBackground('15')
+    table.cell(ftfcTable, 1, 1, arrow15, text_color = color.black, bgcolor = bg15, text_size = txtSize)
+
+    [arrow30, bg30] = getArrowAndBackground('30')
+    table.cell(ftfcTable, 2, 1, arrow30, text_color = color.black, bgcolor = bg30, text_size = txtSize)
+
+    [arrow60, bg60] = getArrowAndBackground('60')
+    table.cell(ftfcTable, 3, 1, arrow60, text_color = color.black, bgcolor = bg60, text_size = txtSize)
+
+    [arrow240, bg240] = getArrowAndBackground('240')
+    table.cell(ftfcTable, 4, 1, arrow240, text_color = color.black, bgcolor = bg240, text_size = txtSize)
+
+    [arrowD, bgD] = getArrowAndBackground('D')
+    table.cell(ftfcTable, 5, 1, arrowD, text_color = color.black, bgcolor = bgD, text_size = txtSize)
+
+    [arrow2D, bg2D] = getArrowAndBackground('2D')
+    table.cell(ftfcTable, 6, 1, arrow2D, text_color = color.black, bgcolor = bg2D, text_size = txtSize)
+
+    [arrowW, bgW] = getArrowAndBackground('W')
+    table.cell(ftfcTable, 7, 1, arrowW, text_color = color.black, bgcolor = bgW, text_size = txtSize)
+
+    [arrow2W, bg2W] = getArrowAndBackground('2W')
+    table.cell(ftfcTable, 8, 1, arrow2W, text_color = color.black, bgcolor = bg2W, text_size = txtSize)
+
+    [arrowM, bgM] = getArrowAndBackground('M')
+    table.cell(ftfcTable, 9, 1, arrowM, text_color = color.black, bgcolor = bgM, text_size = txtSize)
+
+    [arrow2M, bg2M] = getArrowAndBackground('2M') // Fetch 2M timeframe
+    table.cell(ftfcTable, 10, 1, arrow2M, text_color = color.black, bgcolor = bg2M, text_size = txtSize) // Add 2M data to table
