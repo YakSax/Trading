@@ -1,0 +1,40 @@
+
+//@version=6
+indicator('Bollinger Band on MACD', shorttitle = 'Bol Band MACD', overlay = false)
+// Adapted from DreadBlitz's 2019 code
+
+
+// Inputs
+fastLength = input(8, 'Fast EMA')
+slowLength = input(26, 'Slow EMA')
+stdDevMultiplier = input(0.8, 'Std Dev Multiplier')
+
+// Calculations
+fastEMA = ta.ema(close, fastLength)
+slowEMA = ta.ema(close, slowLength)
+BBMacd = fastEMA - slowEMA
+Avg = ta.ema(BBMacd, 9)
+StdDev = ta.stdev(BBMacd, 9)
+upperBand = Avg + stdDevMultiplier * StdDev
+lowerBand = Avg - stdDevMultiplier * StdDev
+
+// Colors
+plotColor = BBMacd < lowerBand ? color.red : BBMacd > upperBand ? color.green : color.blue
+
+// Plot MACD Line
+macdPlot = plot(BBMacd, title = 'MACD Line', color = plotColor, linewidth = 2, style = plot.style_line)
+
+// Plot Bands
+upperBandPlot = plot(upperBand, title = 'Upper Band', color = color.blue, linewidth = 1, style = plot.style_line)
+lowerBandPlot = plot(lowerBand, title = 'Lower Band', color = color.blue, linewidth = 1, style = plot.style_line)
+fill(upperBandPlot, lowerBandPlot, color = color.new(color.blue, 80))
+
+// Highlight crossovers
+fill(macdPlot, lowerBandPlot, color = BBMacd < lowerBand ? color.new(color.red, 50) : na)
+fill(macdPlot, upperBandPlot, color = BBMacd > upperBand ? color.new(color.green, 50) : na)
+
+// Add Dashed Lines at +0.25 and -0.25
+bandUpper = hline(0.25, 'Upper Dashed Line', color = color.new(color.gray, 50), linestyle = hline.style_dashed)
+hline(0, 'Middle Line', color = color.new(color.gray, 50))
+bandLower = hline(-0.25, 'Lower Dashed Line', color = color.new(color.gray, 50), linestyle = hline.style_dashed)
+fill(bandUpper, bandLower, color = color.new(color.blue, 90), title = 'Background')
