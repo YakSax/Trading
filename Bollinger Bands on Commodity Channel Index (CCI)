@@ -1,0 +1,42 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yak_Sax
+// Adapted from DreadBlitz's Bollinger Bands on MACD
+
+
+//@version=6
+indicator("Bollinger Bands on CCI", shorttitle = "Bol Bands CCI", overlay=false)
+
+// Inputs
+cciLength = input.int(20, "CCI Length")
+stdv = input.float(0.8, "CCI Stdv")
+sdevLength = input.int(9, "CCI SDev Length")
+
+// CCI Calculation
+CCI = ta.cci(close, cciLength)
+Avg = ta.ema(CCI, 9)
+SDev = ta.stdev(CCI, sdevLength)
+
+// Bollinger Bands on CCI
+upper_band = Avg + stdv * SDev
+lower_band = Avg - stdv * SDev
+
+// Color Logic
+pcol = CCI < lower_band ? color.red : CCI > upper_band ? color.green : color.blue
+
+// Plot Lines
+c = plot(CCI, title='CCI Line BB', color=pcol, linewidth=2, style=plot.style_line)
+a = plot(upper_band, title='Upper Band', color=color.new(color.blue, 70), linewidth=1, style=plot.style_line)
+b = plot(lower_band, title='Lower Band', color=color.new(color.blue, 70), linewidth=1, style=plot.style_line)
+
+band1 = hline(100, "Upper Band", color=#787B86, linestyle=hline.style_dashed)
+hline(0, "Middle Band", color=color.new(#787B86, 50))
+band0 = hline(-100, "Lower Band", color=#787B86, linestyle=hline.style_dashed)
+fill(band1, band0, color=color.rgb(33, 150, 243, 90), title="Background")
+
+
+// Fill Bands
+fill(a, b, color=color.new(color.blue, 70))
+pcol1 = CCI < lower_band ? color.new(color.red, 50) : na
+fill(c, b, color=pcol1)
+pcol2 = CCI > upper_band ? color.new(color.green, 50) : na
+fill(c, a, color=pcol2)
