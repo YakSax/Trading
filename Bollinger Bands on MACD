@@ -1,7 +1,7 @@
 
 //@version=6
 indicator('Bollinger Band on MACD', shorttitle = 'Bol Band MACD', overlay = false)
-// Adapted from DreadBlitz's 2019 code
+// Adapted from DreadBlitz's 2019 code .
 
 
 // Inputs
