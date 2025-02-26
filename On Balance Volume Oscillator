@@ -1,0 +1,33 @@
+
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yak_Sax
+
+// Inspired by LazyBear's 2014 On Balance Volume Oscillator'
+//@version=6
+indicator(title = 'On Balance Volume Oscillator', shorttitle = 'On Balance Volume Osc', overlay = false)
+// Uses cumulative sum of positive volume minus cumulative sum of negative volume
+
+// Input Parameters
+src = close
+length = input(20, title = 'EMA Length')
+
+// OBV Calculation
+obv(src) =>
+    ta.cum(ta.change(src) > 0 ? volume : ta.change(src) < 0 ? -volume : 0)
+
+os = obv(src)
+obv_osc = os - ta.ema(os, length)
+
+// Define Colors
+obc_color = obv_osc > 0 ? color.green : color.red
+fill_color = obv_osc > 0 ? color.rgb(76, 175, 79, 77) : color.rgb(255, 82, 82, 77)
+
+// Plot OBV
+OBV_plot = plot(obv_osc, color = obc_color, style = plot.style_line, title = 'OBV', linewidth = 1)
+
+// Reference Lines
+hline(0, 'Zero Line', color = color.blue, linestyle = hline.style_dotted)
+
+// Fill Between OBV line and Zero Line
+zero_line = plot(0, title = 'Zero Line', color = color.blue, linewidth = 1)
+fill(zero_line, OBV_plot, color = color.new(fill_color, 80))
