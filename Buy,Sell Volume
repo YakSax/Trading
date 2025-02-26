@@ -1,0 +1,16 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// Based on the version by Rauki
+// Updated by © Yak_Sax
+
+// This indicator attempts to proxy buy and sell volume based on candle open, high, low, and close. It is not the true buy volume.
+// Note: The Sell volume is actually Total Volume so that it is visible above the buy volume.
+
+//@version=6
+indicator('Buy,Sell Volume', format = format.volume, precision = 0)
+
+// BUYING VOLUME AND SELLING VOLUME //
+buyVolume = high == low ? 0 : volume * (close - low) / (high - low)
+sellVolume = high == low ? 0 : volume * (high - close) / (high - low)
+
+plot(volume, style = plot.style_columns, color = color.red, title = 'SELL V') // shows total volume
+plot(buyVolume, style = plot.style_columns, color = color.teal, title = 'BUY V') // shows only buy volume
