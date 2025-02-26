@@ -1,0 +1,90 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// Modified from the version originally made by LazyBear
+// Updated by Yak_Sax
+
+// This is the NYSE McClellan Oscillator (Ratio-Adjusted), with a Parabolic SAR applied to it. It meant to mimic $NYMO on stockcharts.com.
+// Note: Tom McClellan does not recommend using the Nasdaq version due to downward bias.
+// Look for Divergences: when Parabolic SAR jumps above the McClellan Oscillator, thats is suggestive of weakening market breadth (cautionary for flip to bearish reaction)
+// when Parabolic SAR jumps below the McClellan Oscillator, thats is suggestive of strengthening market breadth (cautionary for flip to bullish reaction)
+
+//@version=6
+indicator('McClellan Oscillator with Parabolic SAR', shorttitle = 'McClellan Osc w/ Parabolic SAR')
+advissues = input.symbol('ADVN', title = 'Advancing Stocks Symbol')
+decissues = input.symbol('DECN', title = 'Declining Stocks Symbol')
+is_RatioAdj = input(true, title = 'Stockcharts version (Ratio Adjusted)?')
+rm = input(defval = 1000, title = 'RANA ratio multiplier')
+showEMAs = input(false, title = 'Show EMAs?')
+showOsc = input(true, title = 'Show Oscillator?')
+useCTF = input(false, title = 'Use Custom Timeframe?')
+
+tf = useCTF ? input.timeframe('D', title = 'Custom Timeframe') : timeframe.period
+
+// Request security data
+ai = request.security(advissues, tf, close)
+di = request.security(decissues, tf, close)
+
+// Calculate RANA (Ratio-Adjusted Net Advancers)
+rana = rm * (ai - di) / (ai + di)
+
+// Calculate EMAs
+e1 = is_RatioAdj ? ta.ema(rana, 19) : ta.ema(ai - di, 19)
+e2 = is_RatioAdj ? ta.ema(rana, 39) : ta.ema(ai - di, 39)
+mcllelan_osc = e1 - e2
+
+hline(0, title = 'ZeroLine')
+// Plot Oscillator
+plot(showOsc ? mcllelan_osc < 0 ? mcllelan_osc : 0 : na, style = plot.style_area, color = color.rgb(224, 89, 89, 51), title = 'MO_Negative')
+plot(showOsc ? mcllelan_osc >= 0 ? mcllelan_osc : 0 : na, style = plot.style_area, color = color.rgb(88, 154, 90, 53), title = 'MO_Positive')
+plot(showOsc ? mcllelan_osc : na, style = plot.style_line, color = color.black, title = 'MO', linewidth = 2)
+
+// Plot EMAs
+plot(showEMAs ? e1 : na, color = color.blue, linewidth = 2, title = '19 EMA')
+plot(showEMAs ? e2 : na, color = color.red, linewidth = 2, title = '39 EMA')
+
+
+// Parabolic SAR Calculation
+start_af = 0.02 // Starting acceleration factor
+increment = 0.02 // Acceleration increment
+max_af = 0.20 // Maximum acceleration factor
+
+var sar = 0.0
+var ep = 0.0
+var af = start_af
+var bool uptrend = true
+
+if na(sar)
+    sar := mcllelan_osc[1] // Initial SAR value is the previous MO value
+    ep := mcllelan_osc // Initial extreme point is MO value
+    uptrend := true // Assume an initial uptrend
+    uptrend
+
+// Adjust SAR based on trend direction
+if uptrend
+    sar := sar + af * (ep - sar)
+    if mcllelan_osc < sar // Trend reversal to downtrend
+        uptrend := false
+        sar := ep
+        ep := mcllelan_osc
+        af := start_af
+        af
+else
+    sar := sar + af * (ep - sar)
+    if mcllelan_osc > sar // Trend reversal to uptrend
+        uptrend := true
+        sar := ep
+        ep := mcllelan_osc
+        af := start_af
+        af
+
+// Update Extreme Point (EP) and Acceleration Factor (AF)
+if uptrend and mcllelan_osc > ep
+    ep := mcllelan_osc
+    af := math.min(af + increment, max_af)
+    af
+if not uptrend and mcllelan_osc < ep
+    ep := mcllelan_osc
+    af := math.min(af + increment, max_af)
+    af
+
+// Plot Parabolic SAR on MO
+plot(sar, title = 'SAR on MO', color = color.rgb(255, 255, 255, 37), style = plot.style_circles)
