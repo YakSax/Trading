@@ -1,0 +1,41 @@
+// @Yak_Sax
+// Inspired by LazyBear's 2014 On Balance Volume Oscillator'
+//@version=6
+indicator(title = 'On Balance Volume Oscillator Z-Score', shorttitle = 'On Bal Volume Osc Z-Score', overlay = false)
+
+// Input Parameters
+src = close
+length = input(20, title = 'EMA Length')
+z_length = input(50, title = 'Z-Score Length')
+
+// OBV Calculation
+obv(src) =>
+    ta.cum(ta.change(src) > 0 ? volume : ta.change(src) < 0 ? -volume : 0)
+
+os = obv(src)
+obv_osc = os - ta.ema(os, length)
+
+// Z-Score Calculation
+obv_osc_Mean = ta.sma(obv_osc, z_length) // Mean of OBV oscillator
+obv_osc_StdDev = ta.stdev(obv_osc, z_length) // Standard deviation
+obv_osc_ZScore = (obv_osc - obv_osc_Mean) / obv_osc_StdDev
+
+// Define Colors
+obc_color = obv_osc_ZScore > 0 ? color.green : color.red
+fill_color = obv_osc_ZScore > 0 ? color.rgb(76, 175, 79, 77) : color.rgb(255, 82, 82, 77)
+
+// Plot OBV Z-Score
+zscore_plot = plot(obv_osc_ZScore, color = obc_color, style = plot.style_line, title = 'OBV Z-Score', linewidth = 1)
+
+// Reference Lines
+hline(0, 'Zero Line', color = color.blue)
+hline(1, 'Upper Threshold', color = color.gray, linestyle = hline.style_dotted)
+hline(-1, 'Lower Threshold', color = color.gray, linestyle = hline.style_dotted)
+
+// Fill Between OBV Z-Score and Zero Line
+zero_line = plot(0, title = 'Zero Line', color = color.blue, linewidth = 1)
+fill(zero_line, zscore_plot, color = color.new(fill_color, 80))
+
+// The Original, non-ZScore version
+// plot(obv_osc, color=obc_color, style=line,title="OBV-Points", linewidth=2)
+// plot(obv_osc, color=silver, transp=70, title="OBV", style=area)
