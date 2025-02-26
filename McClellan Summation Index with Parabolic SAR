@@ -1,0 +1,91 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yak_Sax
+
+// This is the NYSE McClellan Summation Index, with a Parabolic SAR applied to it. It meant to mimic $NYSI on stockcharts.com.
+// Note: Tom McClellan does not recommend using the Nasdaq version due to downward bias.
+// Look for Divergences: when Parabolic SAR jumps above the McClellan Summation Index, thats is suggestive of weakening market breadth (cautionary for flip to bearish reaction)
+// when Parabolic SAR jumps below the McClellan Summation Index, thats is suggestive of strengthening market breadth (cautionary for flip to bullish reaction)
+
+//@version=6
+indicator('McClellan Summation Index with Parabolic SAR', shorttitle = 'McClellan Sum Index w/ Parabolic SAR')
+advissues = input.symbol('ADVN', title = 'Advancing Stocks Symbol')
+decissues = input.symbol('DECN', title = 'Declining Stocks Symbol')
+is_RatioAdj = input(true, title = 'Use Ratio-Adjusted Net Advances?')
+rm = input(defval = 1000, title = 'RANA Ratio Multiplier')
+showEMAs = input(false, title = 'Show EMAs?')
+showIndex = input(true, title = 'Show Summation Index?')
+useCTF = input(false, title = 'Use Custom Timeframe?')
+
+tf = useCTF ? input.timeframe('D', title = 'Custom Timeframe') : timeframe.period
+
+// Request security data
+ai = request.security(advissues, tf, close)
+di = request.security(decissues, tf, close)
+
+// Calculate Net Advances
+netAdvances = ai - di
+
+// Calculate Ratio-Adjusted Net Advances (RANA) if selected
+rana = rm * netAdvances / (ai + di)
+
+// Select the data for EMA calculations
+emaInput = is_RatioAdj ? rana : netAdvances
+
+// Calculate EMAs
+e1 = ta.ema(emaInput, 19)
+e2 = ta.ema(emaInput, 39)
+
+// Calculate McClellan Oscillator
+mcclellanOsc = e1 - e2
+
+// Calculate McClellan Summation Index (Cumulative McClellan Oscillator)
+msi = ta.cum(mcclellanOsc)
+
+// Plot Summation Index
+plot(showIndex ? msi : na, style = plot.style_line, color = color.rgb(1, 4, 153, 16), title = 'MSI', linewidth = 2)
+
+// Plot EMAs if selected
+plot(showEMAs ? e1 : na, color = color.blue, linewidth = 2, title = '19 EMA')
+plot(showEMAs ? e2 : na, color = color.red, linewidth = 2, title = '39 EMA')
+
+// Parabolic SAR Calculation
+start_af = 0.02  // Starting acceleration factor
+increment = 0.02  // Acceleration increment
+max_af = 0.20  // Maximum acceleration factor
+
+var float sar = na
+var float ep = na
+var float af = start_af
+var bool uptrend = true
+
+if na(sar)
+    sar := msi[1]  // Initial SAR value is the previous MSI value
+    ep := msi  // Initial extreme point is the current MSI value
+    uptrend := true  // Assume an initial uptrend
+
+// Adjust SAR based on trend direction
+if uptrend
+    sar := sar + af * (ep - sar)
+    if msi < sar  // Trend reversal to downtrend
+        uptrend := false
+        sar := ep
+        ep := msi
+        af := start_af
+else
+    sar := sar + af * (ep - sar)
+    if msi > sar  // Trend reversal to uptrend
+        uptrend := true
+        sar := ep
+        ep := msi
+        af := start_af
+
+// Update Extreme Point (EP) and Acceleration Factor (AF)
+if uptrend and msi > ep
+    ep := msi
+    af := math.min(af + increment, max_af)
+if not uptrend and msi < ep
+    ep := msi
+    af := math.min(af + increment, max_af)
+
+// Plot Parabolic SAR on MSI
+plot(sar, title = 'SAR on MSI', color = color.rgb(255, 255, 255, 37), style = plot.style_circles)
