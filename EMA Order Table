@@ -1,0 +1,58 @@
+indicator("EMA Order Table", shorttitle="EMA Order", overlay=true)
+
+// --- Inputs ---
+showTable = input.bool(true, title="Show EMA Order Table")
+
+tablePositionInput = input.string("Bottom Right", title="Table Position", 
+    options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"])
+
+tableSizeInput = input.string("Medium", title="Table Size", 
+    options=["Small", "Medium", "Large"])
+
+// Function to convert user selection into position enum
+getTablePosition(pos) =>
+    pos == "Top Left" ? position.top_left : pos == "Top Right" ? position.top_right :
+    pos == "Bottom Left" ? position.bottom_left : position.bottom_right
+
+// Function to convert size selection into size enum
+getTextSize(sizeInput) =>
+    sizeInput == "Small" ? size.small : sizeInput == "Large" ? size.large : size.normal
+
+// Function to check EMA order
+checkEMAOrder(tf) =>
+    ema9 = ta.ema(request.security(syminfo.tickerid, tf, close), 9)
+    ema13 = ta.ema(request.security(syminfo.tickerid, tf, close), 13)
+    ema21 = ta.ema(request.security(syminfo.tickerid, tf, close), 21)
+    ema50 = ta.ema(request.security(syminfo.tickerid, tf, close), 50)
+    ema200 = ta.ema(request.security(syminfo.tickerid, tf, close), 200)
+    bullish = ema9 > ema13 and ema13 > ema21 and ema21 > ema50 and ema50 > ema200
+    bearish = ema9 < ema13 and ema13 < ema21 and ema21 < ema50 and ema50 < ema200
+    [bullish, bearish]
+
+// Get EMA order for 1-minute and 5-minute timeframes
+[bullish1, bearish1] = checkEMAOrder("1")
+[bullish5, bearish5] = checkEMAOrder("5")
+
+// Assign icons and colors
+getIconAndColor(bullish, bearish) =>
+    icon = bullish ? "✔" : bearish ? "✔" : "-"
+    bgColor = bullish ? color.green : bearish ? color.red : color.gray
+    [icon, bgColor]
+
+[icon1, bg1] = getIconAndColor(bullish1, bearish1)
+[icon5, bg5] = getIconAndColor(bullish5, bearish5)
+
+// --- Create Table ---
+var table emaTable = table.new(position=getTablePosition(tablePositionInput), columns=2, rows=3, bgcolor=color.gray)
+textSize = getTextSize(tableSizeInput)
+
+if showTable
+    if bar_index == 0
+        table.cell(emaTable, 0, 0, "Timeframe", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize)
+        table.cell(emaTable, 0, 1, "EMA Order", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize)
+    
+    table.cell(emaTable, 1, 0, "1m", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize)
+    table.cell(emaTable, 2, 0, "5m", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize)
+    
+    table.cell(emaTable, 1, 1, icon1, text_color=color.black, bgcolor=bg1, text_size=textSize)
+    table.cell(emaTable, 2, 1, icon5, text_color=color.black, bgcolor=bg5, text_size=textSize)
