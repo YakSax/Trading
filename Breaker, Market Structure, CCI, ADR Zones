@@ -1,0 +1,2759 @@
+
+
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Yak_Sax
+
+//@version=5
+indicator('Breaker, Market Structure, CCI, ADR Zones', shorttitle = "BKR, Market Structure, ADR', max_lines_count = 500, max_boxes_count = 200, max_labels_count = 400, max_bars_back = 5000, overlay = true)
+
+
+// ========================================================================================
+// ACKNOWLEDGEMENTS:
+// Credit where credit is due, these are the individuals below who graciously provided 
+// open-source code for their excellent indicators and for that I am grateful
+// LuxAlgo's 2023 Breaker Blocks with Signals [LuxAlgo]
+// LuxAlgo's 2023 Market Structure CHoCH/BOS (Fractal) [LuxAlgo]
+// TFlab's 2024 Market Structures + ZigZag [TradingFinder] CHoCH/BOS - MSS/MSB
+// KivancOzbiligic's 2021 Supertrend
+// DreadBlitz's 2019 Bollinger Bands on MACD
+// LoneSomeTheBlue's 2021 Higher High Lower Low Strategy (With Source Code)
+// theStratuchiha ATRvsDTR + ADR Zone + SSS50% 
+
+// Also highly recommend
+// UAlgo's Price Action Volumetric Order Blocks [Ualgo]
+// ========================================================================================
+
+
+
+// ================================================================================================
+// PLOT HEIKEN ASHI CANDLE SHADOWS 
+// NOTE: MUST REDUCE CANDLE AND WICK OPACITY TO 80% TO SEE HEIKEN ASHI BEHIND SOME CANDLES THAT ENGULF IT
+// USEFUL FOR CONFIDENCE IN MOMENTUM / DIRECTION AND FOR SETTING STOPS
+// ================================================================================================
+
+// User toggle to enable/disable Heiken Ashi overlay
+showHA = input(true, title = 'Show Heiken Ashi Candles')
+
+// Compute Heiken Ashi values
+var float haOpen = na
+haClose = (open + high + low + close) / 4
+haOpen := na(haOpen[1]) ? (open + close) / 2 : (haOpen[1] + haClose[1]) / 2
+haHigh = math.max(high, math.max(haOpen, haClose))
+haLow = math.min(low, math.min(haOpen, haClose))
+
+// Plot Heiken Ashi candles with 20% opacity (80% transparency)
+col = haClose >= haOpen ? color.rgb(76, 175, 79, 70) : color.rgb(255, 82, 82, 69)
+plotcandle(showHA ? haOpen : na, showHA ? haHigh : na, showHA ? haLow : na, showHA ? haClose : na, color = col, wickcolor = color.gray, bordercolor = color.black)
+
+
+// ============
+// PLOT EMAS
+// ============
+
+// Exponential Moving Averages
+showEMA = input(false, title = 'Show EMAs', group = "EMAs")
+// User inputs for EMAs
+EMA1 = input.int(13, title = 'EMA 1', minval = 1, group = "EMAs")
+EMA2 = input.int(21, title = 'EMA 2', minval = 1, group = "EMAs")
+EMA3 = input.int(50, title = 'EMA 3', minval = 1, group = "EMAs")
+EMA4 = input.int(200, title = 'EMA 4', minval = 1, group = "EMAs")
+EMA5 = input.int(325, title = 'EMA 5', minval = 1, group = "EMAs")
+
+// User inputs for EMA colors
+EMA1Color = input.color(#ea0404ba, title = 'EMA 1 Color', group = "EMAs")
+EMA2Color = input.color(#d86010bc, title = 'EMA 2 Color', group = "EMAs")
+EMA3Color = input.color(#d1c819b0, title = 'EMA 3 Color', group = "EMAs")
+EMA4Color = input.color(color.rgb(83, 207, 16, 28), title = 'EMA 4 Color', group = "EMAs")
+EMA5Color = input.color(#d20eaeba, title = 'EMA 5 Color', group = "EMAs")
+
+// Plot EMAs with user toggle and customizable colors
+plot(showEMA ? ta.ema(close, EMA1) : na, title = 'EMA 1', color = color.new(EMA1Color, 70), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA2) : na, title = 'EMA 2', color = color.new(EMA2Color, 50), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA3) : na, title = 'EMA 3', color = color.new(EMA3Color, 40), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA4) : na, title = 'EMA 4', color = color.new(EMA4Color, 30), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA5) : na, title = 'EMA 5', color = color.new(EMA5Color, 20), linewidth = 2)
+
+
+// =====================================================================
+// BREAKER BLOCK (ICT CONCEPT)
+// with credit to LuxAlgo's 2023 Breaker Blocks with Signals [LuxAlgo]
+// =====================================================================
+
+//------------------------------------------------------------------------------
+//Settings
+//-----------------------------------------------------------------------------{
+shZZ = false
+len = input.int(5, title = '      Length', inline = 'MS', group = 'Market Structure', minval = 1, maxval = 10)
+//Breaker block
+breakerCandleOnlyBody = input.bool(false, title = 'Use only candle body', group = 'Breaker Block')
+breakerCandle_2Last = input.bool(false, title = 'Use 2 candles instead of 1', group = 'Breaker Block', tooltip = 'In the same direction')
+tillFirstBreak = input.bool(true, title = 'Stop at first break of center line', group = 'Breaker Block')
+
+//PD array
+onlyWhenInPDarray = input.bool(false, title = 'Only when E is in Premium/Discount Array', group = 'PD array')
+showPDarray = input.bool(false, title = 'show Premium/Discount Zone', group = 'PD array')
+showBreaks = input.bool(false, title = 'Highlight Swing Breaks', group = 'PD array')
+showSPD = input.bool(true, title = 'Show Swings/PD Arrays', group = 'PD array')
+PDtxtCss = input.color(color.silver, 'Text Color', group = 'PD array')
+PDSCss = input.color(color.silver, 'Swing Line Color', group = 'PD array')
+
+//Take profit
+iTP = input.bool(false, title = 'Enable TP', inline = 'RR', group = 'TP')
+tpCss = input.color(#2157f3, title = '', inline = 'RR', group = 'TP')
+R1a = input.float(1, title = 'R:R 1', minval = 1, maxval = 1, inline = 'RR1', group = 'TP')
+R2a = input.float(2, title = ':', minval = .2, step = .1, inline = 'RR1', group = 'TP')
+R1b = input.float(1, title = 'R:R 2', minval = 1, maxval = 1, inline = 'RR2', group = 'TP')
+R2b = input.float(3, title = ':', minval = .2, step = .1, inline = 'RR2', group = 'TP')
+R1c = input.float(1, title = 'R:R 3', minval = 1, maxval = 1, inline = 'RR3', group = 'TP')
+R2c = input.float(4, title = ':', minval = .2, step = .1, inline = 'RR3', group = 'TP')
+
+//Colors
+cBBplusA = input.color(color.rgb(181, 12, 181, 75), title = '      ', inline = 'bl', group = 'Colors    +BB                   Last Swings')
+cBBplusB = input.color(color.rgb(12, 181, 26, 53), title = '', inline = 'bl', group = 'Colors    +BB                   Last Swings')
+cSwingBl = input.color(color.rgb(255, 82, 82, 81), title = '        ', inline = 'bl', group = 'Colors    +BB                   Last Swings')
+cBB_minA = input.color(color.rgb(255, 17, 0, 95), title = '      ', inline = 'br', group = 'Colors    -BB                   Last Swings')
+cBB_minB = input.color(color.rgb(255, 17, 0, 50), title = '', inline = 'br', group = 'Colors    -BB                   Last Swings')
+cSwingBr = input.color(color.rgb(0, 137, 123, 85), title = '        ', inline = 'br', group = 'Colors    -BB                   Last Swings')
+
+_arrowup = '▲'
+_arrowdn = '▼'
+_c = '●'
+_x = '❌'
+
+//-----------------------------------------------------------------------------}
+//General Calculations
+//-----------------------------------------------------------------------------{
+per = last_bar_index - bar_index <= 2000
+mx = math.max(close, open)
+mn = math.min(close, open)
+atr = ta.atr(10)
+n = bar_index
+hi = high
+lo = low
+mCxSize = 50
+
+//-----------------------------------------------------------------------------}
+//User Defined Types
+//-----------------------------------------------------------------------------{
+type ZZ
+	array<int> d
+	array<int> x
+	array<float> y
+	array<line> l
+	array<bool> b
+
+type mss
+	int dir
+	array<line> l_mssBl
+	array<line> l_mssBr
+	array<line> l_bosBl
+	array<line> l_bosBr
+	array<label> lbMssBl
+	array<label> lbMssBr
+	array<label> lbBosBl
+	array<label> lbBosBr
+
+type block
+	int dir
+	bool Broken
+	bool Mitigated
+	box BB_boxA
+	box BB_boxB
+	line BB_line
+	box FVG_box
+	line line_1
+	line line_2
+	bool Broken_1
+	bool Broken_2
+	box PDa_boxA
+	box PDa_boxB
+	box PDa_box1
+	line PDaLine1
+	label PDaLab_1
+	box PDa_box2
+	line PDaLine2
+	label PDaLab_2
+	bool PDbroken1
+	bool PDbroken2
+	line TP1_line
+	line TP2_line
+	line TP3_line
+	bool TP1_hit
+	bool TP2_hit
+	bool TP3_hit
+	bool scalp
+	label HL
+	array<label> aLabels
+
+//-----------------------------------------------------------------------------}
+//Variables
+//-----------------------------------------------------------------------------{
+BBplus = 0
+signUP = 1
+cnclUP = 2
+LL1break = 3
+LL2break = 4
+SW1breakUP = 5
+SW2breakUP = 6
+tpUP1 = 7
+tpUP2 = 8
+tpUP3 = 9
+BB_endBl = 10
+BB_min = 11
+signDN = 12
+cnclDN = 13
+HH1break = 14
+HH2break = 15
+SW1breakDN = 16
+SW2breakDN = 17
+tpDN1 = 18
+tpDN2 = 19
+tpDN3 = 20
+BB_endBr = 21
+
+signals = array.from(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false) // BBplus , false // signUP , false // cnclUP , false // LL1break , false // LL2break , false // SW1breakUP , false // SW2breakUP , false // tpUP1 , false // tpUP2 , false // tpUP3 , false // BB_endBl , false // BB_min , false // signDN , false // cnclDN , false // HH1break , false // HH2break , false // SW1breakDN , false // SW2breakDN , false // tpDN1 , false // tpDN2 , false // tpDN3 , false // BB_endBr )
+
+var array<block> aBlockBl = array.new<block>()
+var array<block> aBlockBr = array.new<block>()
+
+var ZZ aZZ = ZZ.new(array.new<int>(mCxSize, 0), array.new<int>(mCxSize, 0), array.new<float>(mCxSize, na), array.new<line>(mCxSize, na), array.new<bool>(mCxSize, na))
+
+var mss MSS = mss.new(0, array.new<line>(), array.new<line>(), array.new<line>(), array.new<line>(), array.new<label>(), array.new<label>(), array.new<label>(), array.new<label>())
+
+var block BB = block.new(BB_boxA = box.new(na, na, na, na, border_color = color(na)), BB_boxB = box.new(na, na, na, na, border_color = color(na), text_size = size.normal, text_halign = text.align_right, text_font_family = font.family_monospace), BB_line = line.new(na, na, na, na, style = line.style_dashed, color = color.silver), PDa_box1 = box.new(na, na, na, na, border_color = color(na)), PDaLine1 = line.new(na, na, na, na, color = PDSCss), PDaLab_1 = label.new(na, na, color = color(na)), PDa_box2 = box.new(na, na, na, na, border_color = color(na)), PDaLine2 = line.new(na, na, na, na, color = PDSCss), PDaLab_2 = label.new(na, na, color = color(na)), line_1 = line.new(na, na, na, na, color = PDSCss), line_2 = line.new(na, na, na, na, color = PDSCss), TP1_line = line.new(na, na, na, na, color = tpCss), TP2_line = line.new(na, na, na, na, color = tpCss), TP3_line = line.new(na, na, na, na, color = tpCss), HL = label.new(na, na, color = color(na), textcolor = PDtxtCss, yloc = yloc.price), aLabels = array.new<label>(1, label(na)))
+
+//-----------------------------------------------------------------------------}
+//Functions/methods
+//-----------------------------------------------------------------------------{
+method in_out(ZZ aZZ, int d, int x1, float y1, int x2, float y2, color col, bool b) =>
+    aZZ.d.unshift(d)
+    aZZ.x.unshift(x2)
+    aZZ.y.unshift(y2)
+    aZZ.b.unshift(b)
+    aZZ.d.pop()
+    aZZ.x.pop()
+    aZZ.y.pop()
+    aZZ.b.pop()
+    if shZZ
+        aZZ.l.unshift(line.new(x1, y1, x2, y2, color = col))
+        aZZ.l.pop().delete()
+
+method io_box(array<box> aB, box b) =>
+    aB.unshift(b)
+    aB.pop().delete()
+
+method setLine(line ln, int x1, float y1, int x2, float y2) =>
+    ln.set_xy1(x1, y1)
+    ln.set_xy2(x2, y2)
+
+method notransp(color css) =>
+    color.rgb(color.r(css), color.g(css), color.b(css))
+
+createLab(string s, float y, color c, string t, string sz = size.normal) =>
+    label.new(n, y, style = s == 'c' ? label.style_label_center : s == 'u' ? label.style_label_up : label.style_label_down, textcolor = c, color = color(na), size = sz, text = t)
+
+draw(left, col) =>
+
+    max_bars_back(time, 1000)
+    var int dir = na
+    var int x1 = na
+    var float y1 = na
+    var int x2 = na
+    var float y2 = na
+
+    sz = aZZ.d.size()
+    x2 := bar_index - 1
+    ph = ta.pivothigh(hi, left, 1)
+    pl = ta.pivotlow(lo, left, 1)
+    if ph
+        dir := aZZ.d.get(0)
+        x1 := aZZ.x.get(0)
+        y1 := aZZ.y.get(0)
+        y2 := nz(hi[1])
+
+        if dir < 1 // if previous point was a pl, add, and change direction ( 1)
+            aZZ.in_out(1, x1, y1, x2, y2, col, true)
+        else
+            if dir == 1 and ph > y1
+                aZZ.x.set(0, x2)
+                aZZ.y.set(0, y2)
+                if shZZ
+                    aZZ.l.get(0).set_xy2(x2, y2)
+
+    if pl
+        dir := aZZ.d.get(0)
+        x1 := aZZ.x.get(0)
+        y1 := aZZ.y.get(0)
+        y2 := nz(lo[1])
+
+        if dir > -1 // if previous point was a ph, add, and change direction (-1)
+            aZZ.in_out(-1, x1, y1, x2, y2, col, true)
+        else
+            if dir == -1 and pl < y1
+                aZZ.x.set(0, x2)
+                aZZ.y.set(0, y2)
+                if shZZ
+                    aZZ.l.get(0).set_xy2(x2, y2)
+
+    iH = aZZ.d.get(2) == 1 ? 2 : 1
+    iL = aZZ.d.get(2) == -1 ? 2 : 1
+
+    switch  // MSS Bullish
+        close > aZZ.y.get(iH) and aZZ.d.get(iH) == 1 and MSS.dir < 1 and per => 
+
+    	    Ex = aZZ.x.get(iH - 1)
+    	    Ey = aZZ.y.get(iH - 1)
+    	    Dx = aZZ.x.get(iH)
+    	    Dy = aZZ.y.get(iH)
+    	    DyMx = mx[n - Dx]
+    	    Cx = aZZ.x.get(iH + 1)
+    	    Cy = aZZ.y.get(iH + 1)
+    	    Bx = aZZ.x.get(iH + 2)
+    	    By = aZZ.y.get(iH + 2)
+    	    ByMx = mx[n - Bx]
+    	    Ax = aZZ.x.get(iH + 3)
+    	    Ay = aZZ.y.get(iH + 3)
+    	    AyMn = mn[n - Ax]
+    	    _y = math.max(ByMx, DyMx)
+    	    mid = AyMn + (_y - AyMn) / 2 // 50% fib A- min(B, D)
+    	    isOK = onlyWhenInPDarray ? Ay < Cy and Ay < Ey and Ey < mid : true
+
+    	    float green1prT = na
+    	    float green1prB = na
+    	    float avg = na
+
+    	    if Ey < Cy and Cx != Dx and isOK
+    	        // latest HH to 1 HH further -> search first green bar
+    	        for i = n - Dx to n - Cx by 1
+    	            if close[i] > open[i]
+    	                // reset previous swing box's
+    	                BB.PDa_box1.set_lefttop(na, na)
+    	                BB.PDaLine1.set_xy1(na, na)
+    	                BB.PDaLab_1.set_xy(na, na)
+    	                BB.PDa_box2.set_lefttop(na, na)
+    	                BB.PDaLine2.set_xy1(na, na)
+    	                BB.PDaLab_2.set_xy(na, na)
+
+    	                green1idx = n - i
+    	                green1prT := breakerCandleOnlyBody ? mx[i] : high[i]
+    	                green1prB := breakerCandleOnlyBody ? mn[i] : low[i]
+    	                if breakerCandle_2Last
+    	                    if close[i + 1] > open[i + 1]
+    	                        green2prT = breakerCandleOnlyBody ? mx[i + 1] : high[i + 1]
+    	                        green2prB = breakerCandleOnlyBody ? mn[i + 1] : low[i + 1]
+    	                        if green2prT > green1prT or green2prB < green1prB
+    	                            green1idx := green1idx - 1
+    	                            green1idx
+    	                        green1prT := math.max(green1prT, green2prT)
+    	                        green1prB := math.min(green1prB, green2prB)
+    	                        green1prB
+
+    	                // Breaker Block + 
+    	                avg := math.avg(green1prB, green1prT)
+    	                while BB.aLabels.size() > 0
+    	                    BB.aLabels.pop().delete()
+    	                BB.PDa_boxA.delete()
+    	                BB.PDa_boxB.delete()
+    	                BB.dir := 1
+    	                BB.BB_boxA.set_left(green1idx)
+    	                BB.BB_boxA.set_top(green1prT)
+    	                BB.BB_boxA.set_right(n)
+    	                BB.BB_boxA.set_bottom(green1prB)
+    	                BB.BB_boxA.set_bgcolor(cBBplusA)
+
+    	                BB.BB_boxB.set_left(n)
+    	                BB.BB_boxB.set_top(green1prT)
+    	                BB.BB_boxB.set_right(n + 8)
+    	                BB.BB_boxB.set_bottom(green1prB)
+    	                BB.BB_boxB.set_bgcolor(cBBplusB)
+    	                BB.BB_boxB.set_text('+BB')
+    	                BB.BB_boxB.set_text_color(cBBplusB.notransp())
+    	                BB.BB_boxB.set_text_valign(text.align_bottom)
+
+    	                BB.BB_line.set_xy1(n, avg)
+    	                BB.BB_line.set_xy2(n, avg)
+
+    	                if showSPD
+    	                    BB.line_1.set_xy1(Cx, Cy)
+    	                    BB.line_1.set_xy2(n, Cy)
+    	                    BB.Broken_1 := false
+    	                    BB.line_2.set_xy1(Ex, Ey)
+    	                    BB.line_2.set_xy2(n, Ey)
+    	                    BB.Broken_2 := false
+    	                    BB.HL.set_xy(Ex, Ey)
+    	                    BB.HL.set_style(label.style_label_up)
+    	                    BB.HL.set_text('LL')
+
+    	                BB.TP1_hit := false
+    	                BB.TP2_hit := false
+    	                BB.TP3_hit := false
+    	                BB.Broken := false
+    	                BB.Mitigated := false
+    	                BB.scalp := false
+    	                BB.PDbroken1 := false
+    	                BB.PDbroken2 := false
+
+    	                if onlyWhenInPDarray and showPDarray
+    	                    BB.PDa_boxA := box.new(Ax, mid, Ex + 1, AyMn, bgcolor = color.rgb(132, 248, 171, 90), border_color = color(na), text = 'Discount PD Array', text_size = size.normal, text_color = color.rgb(132, 248, 171, 25), text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
+    	                    BB.PDa_boxB := box.new(Ax, _y, Ex + 1, mid, bgcolor = color.rgb(248, 153, 132, 90), border_color = color(na))
+    	                    BB.PDa_boxB
+
+    	                // Previous swings
+    	                cnt = 0
+    	                hh1 = high
+    	                for c = 0 to sz - 2 by 1
+    	                    getX = aZZ.x.get(c)
+    	                    getY = aZZ.y.get(c)
+    	                    if getY > hh1 and aZZ.d.get(c) == 1 and showSPD
+    	                        getY2 = (high[n - getX] - mn[n - getX]) / 4
+    	                        switch cnt
+    	                            0 => 
+    	                        	    BB.PDa_box1.set_lefttop(getX, getY)
+    	                        	    BB.PDaLine1.set_xy1(getX, getY)
+    	                        	    BB.PDa_box1.set_rightbottom(n, getY - getY2)
+    	                        	    BB.PDaLine1.set_xy2(n, getY)
+    	                        	    BB.PDa_box1.set_bgcolor(cSwingBl)
+    	                        	    BB.PDaLab_1.set_xy(getX, getY)
+    	                        	    BB.PDaLab_1.set_size(size.normal)
+    	                        	    BB.PDaLab_1.set_textcolor(PDtxtCss)
+    	                        	    BB.PDaLab_1.set_text('Premium PD Array')
+    	                        	    BB.PDaLab_1.set_style(label.style_label_lower_left)
+    	                        	    cnt := 1
+    	                        	    hh1 := getY
+    	                        	    hh1
+    	                            1 => 
+    	                        	    if getY - getY2 > hh1
+    	                        	        BB.PDa_box2.set_lefttop(getX, getY)
+    	                        	        BB.PDaLine2.set_xy1(getX, getY)
+    	                        	        BB.PDa_box2.set_rightbottom(n, getY - getY2)
+    	                        	        BB.PDaLine2.set_xy2(n, getY)
+    	                        	        BB.PDa_box2.set_bgcolor(cSwingBl)
+    	                        	        BB.PDaLab_2.set_xy(getX, getY)
+    	                        	        BB.PDaLab_2.set_size(size.normal)
+    	                        	        BB.PDaLab_2.set_textcolor(PDtxtCss)
+    	                        	        BB.PDaLab_2.set_text('Premium PD Array')
+    	                        	        BB.PDaLab_2.set_style(label.style_label_lower_left)
+    	                        	        cnt := 2
+    	                        	        cnt
+    	                    if cnt == 2
+    	                        break
+
+    	                I = green1prT - green1prB
+    	                E1 = green1prT + I * R2a / R1a
+    	                E2 = green1prT + I * R2b / R1b
+    	                E3 = green1prT + I * R2c / R1c
+
+    	                if iTP
+    	                    if not BB.TP1_hit
+    	                        BB.TP1_line.set_xy1(n, E1)
+    	                        BB.TP1_line.set_xy2(n + 20, E1)
+    	                    if not BB.TP2_hit
+    	                        BB.TP2_line.set_xy1(n, E2)
+    	                        BB.TP2_line.set_xy2(n + 20, E2)
+    	                    if not BB.TP3_hit
+    	                        BB.TP3_line.set_xy1(n, E3)
+    	                        BB.TP3_line.set_xy2(n + 20, E3)
+
+    	                signals.set(BBplus, true)
+    	                alert('+BB', alert.freq_once_per_bar_close)
+    	                BB.aLabels.unshift(createLab('u', low, cBBplusB.notransp(), _arrowup, size.large))
+
+    	                break
+
+    	    MSS.dir := 1
+    	    MSS.dir
+
+        // MSS Bearish
+        close < aZZ.y.get(iL) and aZZ.d.get(iL) == -1 and MSS.dir > -1 and per => 
+    	    Ex = aZZ.x.get(iL - 1)
+    	    Ey = aZZ.y.get(iL - 1)
+    	    Dx = aZZ.x.get(iL)
+    	    Dy = aZZ.y.get(iL)
+    	    DyMn = mn[n - Dx]
+    	    Cx = aZZ.x.get(iL + 1)
+    	    Cy = aZZ.y.get(iL + 1)
+    	    Bx = aZZ.x.get(iL + 2)
+    	    By = aZZ.y.get(iL + 2)
+    	    ByMn = mn[n - Bx]
+    	    Ax = aZZ.x.get(iL + 3)
+    	    Ay = aZZ.y.get(iL + 3)
+    	    AyMx = mx[n - Ax]
+    	    _y = math.min(ByMn, DyMn)
+    	    //_x   = _y == ByMn ? Bx : Dx
+    	    mid = AyMx - (AyMx - _y) / 2 // 50% fib A- min(B, D)
+    	    isOK = onlyWhenInPDarray ? Ay > Cy and Ay > Ey and Ey > mid : true
+    	    //
+    	    float red_1_prT = na
+    	    float red_1_prB = na
+    	    float avg = na
+    	    if Ey > Cy and Cx != Dx and isOK
+    	        // latest LL to LL further -> search first red bar
+    	        for i = n - Dx to n - Cx by 1
+    	            if close[i] < open[i]
+    	                // reset previous swing box's
+    	                BB.PDa_box1.set_lefttop(na, na)
+    	                BB.PDaLine1.set_xy1(na, na)
+    	                BB.PDaLab_1.set_xy(na, na)
+    	                BB.PDa_box2.set_lefttop(na, na)
+    	                BB.PDaLine2.set_xy1(na, na)
+    	                BB.PDaLab_2.set_xy(na, na)
+
+    	                red_1_idx = n - i
+    	                red_1_prT := breakerCandleOnlyBody ? mx[i] : high[i]
+    	                red_1_prB := breakerCandleOnlyBody ? mn[i] : low[i]
+    	                if breakerCandle_2Last
+    	                    if close[i + 1] < open[i + 1]
+    	                        red_2_prT = breakerCandleOnlyBody ? mx[i + 1] : high[i + 1]
+    	                        red_2_prB = breakerCandleOnlyBody ? mn[i + 1] : low[i + 1]
+    	                        if red_2_prT > red_1_prT or red_2_prB < red_1_prB
+    	                            red_1_idx := red_1_idx - 1
+    	                            red_1_idx
+    	                        red_1_prT := math.max(red_1_prT, red_2_prT)
+    	                        red_1_prB := math.min(red_1_prB, red_2_prB)
+    	                        red_1_prB
+
+    	                // Breaker Block -
+    	                avg := math.avg(red_1_prB, red_1_prT)
+    	                while BB.aLabels.size() > 0
+    	                    BB.aLabels.pop().delete()
+    	                BB.PDa_boxA.delete()
+    	                BB.PDa_boxB.delete()
+    	                BB.dir := -1
+    	                BB.BB_boxA.set_left(red_1_idx)
+    	                BB.BB_boxA.set_top(red_1_prT)
+    	                BB.BB_boxA.set_right(n)
+    	                BB.BB_boxA.set_bottom(red_1_prB)
+    	                BB.BB_boxA.set_bgcolor(cBB_minA)
+
+    	                BB.BB_boxB.set_left(n)
+    	                BB.BB_boxB.set_top(red_1_prT)
+    	                BB.BB_boxB.set_right(n + 8)
+    	                BB.BB_boxB.set_bottom(red_1_prB)
+    	                BB.BB_boxB.set_bgcolor(cBB_minB)
+    	                BB.BB_boxB.set_text('-BB')
+    	                BB.BB_boxB.set_text_color(cBB_minB.notransp())
+    	                BB.BB_boxB.set_text_valign(text.align_top)
+
+    	                BB.BB_line.set_xy1(n, avg)
+    	                BB.BB_line.set_xy2(n, avg)
+
+    	                if showSPD
+    	                    BB.line_1.set_xy1(Cx, Cy)
+    	                    BB.line_1.set_xy2(n, Cy)
+    	                    BB.Broken_1 := false
+    	                    BB.line_2.set_xy1(Ex, Ey)
+    	                    BB.line_2.set_xy2(n, Ey)
+    	                    BB.Broken_2 := false
+    	                    BB.HL.set_xy(Ex, Ey)
+    	                    BB.HL.set_style(label.style_label_down)
+    	                    BB.HL.set_text('HH')
+    	                    BB.HL.set_textcolor(PDtxtCss)
+
+    	                BB.TP1_hit := false
+    	                BB.TP2_hit := false
+    	                BB.TP3_hit := false
+    	                BB.Broken := false
+    	                BB.Mitigated := false
+    	                BB.scalp := false
+    	                BB.PDbroken1 := false
+    	                BB.PDbroken2 := false
+
+    	                if onlyWhenInPDarray and showPDarray
+    	                    BB.PDa_boxA := box.new(Ax, AyMx, Ex + 1, mid, bgcolor = color.rgb(248, 153, 132, 90), border_color = color(na), text = 'Premium PD Array', text_size = size.normal, text_color = color.rgb(248, 153, 132, 25), text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
+    	                    BB.PDa_boxB := box.new(Ax, mid, Ex + 1, _y, bgcolor = color.rgb(132, 248, 171, 90), border_color = color(na))
+    	                    BB.PDa_boxB
+
+    	                // Previous swings
+    	                cnt = 0
+    	                ll1 = low
+    	                for c = 0 to sz - 2 by 1
+    	                    getX = aZZ.x.get(c)
+    	                    getY = aZZ.y.get(c)
+    	                    if getY < ll1 and aZZ.d.get(c) == -1 and showSPD
+    	                        getY2 = (mx[n - getX] - low[n - getX]) / 4
+    	                        switch cnt
+    	                            0 => 
+    	                        	    BB.PDa_box1.set_lefttop(getX, getY + getY2)
+    	                        	    BB.PDaLine1.set_xy1(getX, getY)
+    	                        	    BB.PDa_box1.set_rightbottom(n, getY)
+    	                        	    BB.PDaLine1.set_xy2(n, getY)
+    	                        	    BB.PDa_box1.set_bgcolor(cSwingBr)
+    	                        	    BB.PDaLab_1.set_xy(getX, getY)
+    	                        	    BB.PDaLab_1.set_size(size.normal)
+    	                        	    BB.PDaLab_1.set_textcolor(PDtxtCss)
+    	                        	    BB.PDaLab_1.set_text('Discount PD Array')
+    	                        	    BB.PDaLab_1.set_style(label.style_label_upper_left)
+
+    	                        	    cnt := 1
+    	                        	    ll1 := getY
+    	                        	    ll1
+    	                            1 => 
+    	                        	    if getY + getY2 < ll1
+    	                        	        BB.PDa_box2.set_lefttop(getX, getY + getY2)
+    	                        	        BB.PDaLine2.set_xy1(getX, getY)
+    	                        	        BB.PDa_box2.set_rightbottom(n, getY)
+    	                        	        BB.PDaLine2.set_xy2(n, getY)
+    	                        	        BB.PDa_box2.set_bgcolor(cSwingBr)
+    	                        	        BB.PDaLab_2.set_xy(getX, getY)
+    	                        	        BB.PDaLab_2.set_size(size.normal)
+    	                        	        BB.PDaLab_2.set_textcolor(PDtxtCss)
+    	                        	        BB.PDaLab_2.set_text('Discount PD Array')
+    	                        	        BB.PDaLab_2.set_style(label.style_label_upper_left)
+    	                        	        cnt := 2
+    	                        	        cnt
+    	                    if cnt == 2
+    	                        break
+
+    	                I = red_1_prT - red_1_prB
+    	                E1 = red_1_prB - I * R2a / R1a
+    	                E2 = red_1_prB - I * R2b / R1b
+    	                E3 = red_1_prB - I * R2c / R1c
+
+    	                if iTP
+    	                    if not BB.TP1_hit
+    	                        BB.TP1_line.set_xy1(n, E1)
+    	                        BB.TP1_line.set_xy2(n + 20, E1)
+    	                    if not BB.TP2_hit
+    	                        BB.TP2_line.set_xy1(n, E2)
+    	                        BB.TP2_line.set_xy2(n + 20, E2)
+    	                    if not BB.TP3_hit
+    	                        BB.TP3_line.set_xy1(n, E3)
+    	                        BB.TP3_line.set_xy2(n + 20, E3)
+
+    	                signals.set(BB_min, true)
+    	                alert('-BB', alert.freq_once_per_bar_close)
+    	                BB.aLabels.unshift(createLab('d', high, cBB_minB.notransp(), _arrowdn, size.large))
+
+    	                break
+
+    	    MSS.dir := -1
+    	    MSS.dir
+
+//-----------------------------------------------------------------------------}
+//Calculations
+//-----------------------------------------------------------------------------{
+draw(len, tpCss)
+
+
+lft = BB.BB_boxB.get_left()
+top = BB.BB_boxB.get_top()
+btm = BB.BB_boxB.get_bottom()
+avg = BB.BB_line.get_y2()
+l_1 = BB.line_1.get_y2()
+l_2 = BB.line_2.get_y2()
+TP1 = BB.TP1_line.get_y2()
+TP2 = BB.TP2_line.get_y2()
+TP3 = BB.TP3_line.get_y2()
+switch BB.dir 
+    1 => 
+	    if not BB.Mitigated
+	        if close < btm
+	            BB.Mitigated := true
+	            signals.set(BB_endBl, true)
+	            alert('+BB Mitigated', alert.freq_once_per_bar_close)
+
+	            BB.aLabels.unshift(createLab('u', low, color.yellow, _c))
+
+	            BB.BB_boxB.set_right(n)
+	            BB.BB_line.set_x2(n)
+	        else
+	            BB.BB_boxB.set_right(n + 8)
+	            BB.BB_line.set_x2(n + 8)
+
+	        BB.TP1_line.set_x2(n)
+	        BB.TP2_line.set_x2(n)
+	        BB.TP3_line.set_x2(n)
+
+	        if n > BB.BB_boxB.get_left()
+	            if not BB.Broken
+	                if BB.scalp
+	                    if not BB.TP1_hit and open < TP1 and high > TP1
+	                        BB.TP1_hit := true
+	                        signals.set(tpUP1, true)
+	                        alert('TP UP 1', alert.freq_once_per_bar)
+	                        BB.aLabels.unshift(createLab('c', TP1, #ff00dd, _c))
+	                    if not BB.TP2_hit and open < TP2 and high > TP2
+	                        BB.TP2_hit := true
+	                        signals.set(tpUP2, true)
+	                        alert('TP UP 2', alert.freq_once_per_bar)
+	                        BB.aLabels.unshift(createLab('c', TP2, #ff00dd, _c))
+	                    if not BB.TP3_hit and open < TP3 and high > TP3
+	                        BB.TP3_hit := true
+	                        signals.set(tpUP3, true)
+	                        alert('TP UP 3', alert.freq_once_per_bar)
+	                        BB.aLabels.unshift(createLab('c', TP3, #ff00dd, _c))
+	                switch 
+	                    open > avg and open < top and close > top => 
+	                	    BB.TP1_hit := false
+	                	    BB.TP2_hit := false
+	                	    BB.TP3_hit := false
+	                	    BB.scalp := true
+	                	    signals.set(signUP, true)
+	                	    alert('signal UP', alert.freq_once_per_bar_close)
+	                	    BB.aLabels.unshift(createLab('u', low, color.lime, _arrowup, size.normal))
+	                    close < avg and close > btm => 
+	                	    BB.Broken := true
+	                	    BB.scalp := false
+	                	    signals.set(cnclUP, true)
+	                	    alert('cancel UP', alert.freq_once_per_bar_close)
+	                	    BB.aLabels.unshift(createLab('u', low, color.orange, _x))
+	            else // reset
+	                if not tillFirstBreak and close > top
+	                    BB.Broken := false
+	                    BB.scalp := true
+	                    signals.set(BBplus, true)
+	                    alert('+BB (R)', alert.freq_once_per_bar_close)
+	                    BB.aLabels.unshift(createLab('u', low, color.blue, 'R', size.normal))
+
+	    if not BB.Broken_1
+	        BB.line_1.set_x2(n)
+	        if close < l_1
+	            BB.Broken_1 := true
+	            signals.set(LL1break, true)
+	            alert('LL 1 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+	    if not BB.Broken_2
+	        BB.line_2.set_x2(n)
+	        if close < l_2
+	            BB.Broken_2 := true
+	            signals.set(LL2break, true)
+	            alert('LL 2 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+
+	    if not BB.PDbroken1
+	        BB.PDa_box1.set_right(n)
+	        BB.PDaLine1.set_x2(n)
+	        if close > BB.PDa_box1.get_top() and n > BB.PDa_box1.get_left()
+	            BB.PDbroken1 := true
+	            signals.set(SW1breakUP, true)
+	            alert('Swing UP 1 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+	    if not BB.PDbroken2
+	        BB.PDa_box2.set_right(n)
+	        BB.PDaLine2.set_x2(n)
+	        if close > BB.PDa_box2.get_top() and n > BB.PDa_box2.get_left()
+	            BB.PDbroken2 := true
+	            signals.set(SW2breakUP, true)
+	            alert('Swing UP 2 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+    -1 => 
+
+	    if not BB.Mitigated
+	        if close > top
+	            BB.Mitigated := true
+	            signals.set(BB_endBr, true)
+	            alert('-BB Mitigated', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('d', high, cBB_minB.notransp(), _c))
+	            BB.BB_boxB.set_right(n)
+	            BB.BB_line.set_x2(n)
+	        else
+	            BB.BB_boxB.set_right(n + 8)
+	            BB.BB_line.set_x2(n + 8)
+
+	        BB.TP1_line.set_x2(n)
+	        BB.TP2_line.set_x2(n)
+	        BB.TP3_line.set_x2(n)
+
+	        if n > BB.BB_boxB.get_left()
+	            if not BB.Broken
+	                if BB.scalp
+	                    if not BB.TP1_hit and open > TP1 and low < TP1
+	                        BB.TP1_hit := true
+	                        signals.set(tpDN1, true)
+	                        alert('TP DN 1', alert.freq_once_per_bar)
+	                        BB.aLabels.unshift(createLab('c', TP1, #ff00dd, _c))
+	                    if not BB.TP2_hit and open > TP2 and low < TP2
+	                        BB.TP2_hit := true
+	                        signals.set(tpDN2, true)
+	                        alert('TP DN 2', alert.freq_once_per_bar)
+	                        BB.aLabels.unshift(createLab('c', TP2, #ff00dd, _c))
+	                    if not BB.TP3_hit and open > TP3 and low < TP3
+	                        BB.TP3_hit := true
+	                        signals.set(tpDN3, true)
+	                        alert('TP DN 3', alert.freq_once_per_bar)
+	                        BB.aLabels.unshift(createLab('c', TP3, #ff00dd, _c))
+	                switch 
+	                    open < avg and open > btm and close < btm => 
+	                	    BB.TP1_hit := false
+	                	    BB.TP2_hit := false
+	                	    BB.TP3_hit := false
+	                	    BB.scalp := true
+	                	    signals.set(signDN, true)
+	                	    alert('signal DN', alert.freq_once_per_bar_close)
+	                	    BB.aLabels.unshift(createLab('d', high, color.orange, _arrowdn, size.normal))
+	                    close > avg and close < top => 
+	                	    BB.Broken := true
+	                	    BB.scalp := false
+	                	    signals.set(cnclDN, true)
+	                	    alert('cancel DN', alert.freq_once_per_bar_close)
+	                	    BB.aLabels.unshift(createLab('d', high, color.red, _x))
+	            else // reset
+	                if not tillFirstBreak and close < btm
+	                    BB.Broken := false
+	                    BB.scalp := true
+	                    signals.set(BB_min, true)
+	                    alert('-BB (R)', alert.freq_once_per_bar_close)
+	                    BB.aLabels.unshift(createLab('d', high, color.blue, 'R', size.normal))
+
+	    if not BB.Broken_1
+	        BB.line_1.set_x2(n)
+	        if close > l_1
+	            BB.Broken_1 := true
+	            signals.set(HH1break, true)
+	            alert('HH 1 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+	    if not BB.Broken_2
+	        BB.line_2.set_x2(n)
+	        if close > l_2
+	            BB.Broken_2 := true
+	            signals.set(HH2break, true)
+	            alert('HH 2 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+
+	    if not BB.PDbroken1
+	        BB.PDa_box1.set_right(n)
+	        BB.PDaLine1.set_x2(n)
+	        if close < BB.PDa_box1.get_bottom() and n > BB.PDa_box1.get_left()
+	            BB.PDbroken1 := true
+	            signals.set(SW1breakDN, true)
+	            alert('Swing DN 1 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+	    if not BB.PDbroken2
+	        BB.PDa_box2.set_right(n)
+	        BB.PDaLine2.set_x2(n)
+	        if close < BB.PDa_box2.get_bottom() and n > BB.PDa_box2.get_left()
+	            BB.PDbroken2 := true
+	            signals.set(SW2breakDN, true)
+	            alert('Swing DN 2 break', alert.freq_once_per_bar_close)
+	            if showBreaks
+	                BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+
+//-----------------------------------------------------------------------------}
+//Alerts
+//-----------------------------------------------------------------------------{
+alertcondition(signals.get(BBplus), ' 1. +BB', '1. +BB')
+alertcondition(signals.get(signUP), ' 2. signal UP', '2. signal UP')
+alertcondition(signals.get(tpUP1), ' 3. TP UP 1', '3. TP UP 1')
+alertcondition(signals.get(tpUP2), ' 3. TP UP 2', '3. TP UP 2')
+alertcondition(signals.get(tpUP3), ' 3. TP UP 3', '3. TP UP 3')
+alertcondition(signals.get(cnclUP), ' 4. cancel UP', '4. cancel UP')
+alertcondition(signals.get(BB_endBl), ' 5. +BB Mitigated', '5. +BB Mitigated')
+alertcondition(signals.get(LL1break), ' 6. LL 1 Break', '6. LL 1 Break')
+alertcondition(signals.get(LL2break), ' 6. LL 2 Break', '6. LL 2 Break')
+alertcondition(signals.get(SW1breakUP), ' 7. Swing UP 1 Break', '7. Swing UP 1 Break')
+alertcondition(signals.get(SW2breakUP), ' 7. Swing UP 2 Break', '7. Swing UP 2 Break')
+
+alertcondition(signals.get(BB_min), '1. -BB', '1. -BB')
+alertcondition(signals.get(signDN), '2. signal DN', '2. signal DN')
+alertcondition(signals.get(tpDN1), '3. TP DN 1', '3. TP DN 1')
+alertcondition(signals.get(tpDN2), '3. TP DN 2', '3. TP DN 2')
+alertcondition(signals.get(tpDN3), '3. TP DN 3', '3. TP DN 3')
+alertcondition(signals.get(cnclDN), '4. cancel DN', '4. cancel DN')
+alertcondition(signals.get(BB_endBr), '5. -BB Mitigated', '5. -BB Mitigated')
+alertcondition(signals.get(HH1break), '6. HH 1 Break', '6. HH 1 Break')
+alertcondition(signals.get(HH2break), '6. HH 2 Break', '6. HH 2 Break')
+alertcondition(signals.get(SW1breakDN), '7. Swing DN 1 Break', '7. Swing DN 1 Break')
+alertcondition(signals.get(SW2breakDN), '7. Swing DN 2 Break', '7. Swing DN 2 Break')
+
+//-----------------------------------------------------------------------------}
+
+
+// ====================================================================================================
+// MARKET STRUCTURE PLUS ZigZag
+// with credit to TFlab's 2024 Market Structures + ZigZag [TradingFinder] CHoCH/BOS - MSS/MSB
+// ====================================================================================================
+
+//Input
+//Pivot Period of Order Blocks Detector
+PP = input.int(5, 'Pivot Period of Order Blocks Detector', group = 'Logic Parameter', minval = 1)
+
+//Lines
+// Zig Zag
+ShZ = input.bool(true, 'Show Zig Zag Line', group = 'Zig Zag Line') //Show Zig Zag
+ZLS = input.string(line.style_solid, 'Zig Zag Line Style', options = [line.style_solid, line.style_dotted, line.style_dashed], group = 'Zig Zag Line') //Zig Zag Line Style
+ZLC = input.color(#2484bb, 'Zig Zag Line Color', group = 'Zig Zag Line') //Zig Zag Line Color
+ZLW = input.int(1, 'Zig Zag Line Width', group = 'Zig Zag Line') //Zig Zag Line Width 
+//Label
+ShL = input.bool(false, 'Show Label', group = 'Zig Zag Label') //Show Label 
+LC = input.color(#0a378a, 'Label Color', group = 'Zig Zag Label') //Label Color       
+//Bos Lines
+//Major Line
+//Bullish
+MajorBuBoSLine_Show = input.string('On', 'Show Major Bullish BoS Lines', ['On', 'Off'], group = 'Major Bullish "BoS" Lines')
+MajorBuBoSLine_Style = input.string(line.style_solid, 'Style Major Bullish BoS Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Major Bullish "BoS" Lines')
+MajorBuBoSLine_Color = input.color(color.rgb(11, 95, 204), 'Color Major Bullish BoS Lines', group = 'Major Bullish "BoS" Lines')
+
+
+//Bearish
+MajorBeBoSLine_Show = input.string('On', 'Show Major Bearish BoS Lines', ['On', 'Off'], group = 'Major Bearish "BoS" Lines')
+MajorBeBoSLine_Style = input.string(line.style_solid, 'Style Major Bearish BoS Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Major Bearish "BoS" Lines')
+MajorBeBoSLine_Color = input.color(color.rgb(192, 123, 5), 'Color Major Bearish BoS Lines', group = 'Major Bearish "BoS" Lines')
+
+
+//Minor
+//Bullish
+MinorBuBoSLine_Show = input.string('Off', 'Show Minor Bullish BoS  Lines', ['On', 'Off'], group = 'Minor Bullish "BoS"  Lines')
+MinorBuBoSLine_Style = input.string(line.style_dashed, 'Style Minor Bullish BoS  Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Minor Bullish "BoS"  Lines')
+MinorBuBoSLine_Color = input.color(color.black, 'Color Minor Bullish BoS  Lines', group = 'Minor Bullish "BoS"  Lines')
+
+
+//Bearish
+MinorBeBoSLine_Show = input.string('Off', 'Show Minor Bearish BoS Lines', ['On', 'Off'], group = 'Minor Bearish "BoS" Lines')
+MinorBeBoSLine_Style = input.string(line.style_dashed, 'Style inor Bearish BoS Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Minor Bearish "BoS" Lines')
+MinorBeBoSLine_Color = input.color(color.black, 'Color inor Bearish BoS Lines', group = 'Minor Bearish "BoS" Lines')
+
+//ChoCh Lines
+//Major Line
+//Bullish
+MajorBuChoChLine_Show = input.string('On', 'Show Major Bullish ChoCh Lines', ['On', 'Off'], group = 'Major Bullish "ChoCh" Lines')
+MajorBuChoChLine_Style = input.string(line.style_solid, 'Style Major Bullish ChoCh Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Major Bullish "ChoCh" Lines')
+MajorBuChoChLine_Color = input.color(color.rgb(5, 119, 24), 'Color Major Bullish ChoCh Lines', group = 'Major Bullish "ChoCh" Lines')
+
+//Bearish
+MajorBeChoChLine_Show = input.string('On', 'Show Major Bearish ChoCh Lines', ['On', 'Off'], group = 'Major Bearish "ChoCh" Lines')
+MajorBeChoChLine_Style = input.string(line.style_solid, 'Style Major Bearish ChoCh Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Major Bearish "ChoCh" Lines')
+MajorBeChoChLine_Color = input.color(color.rgb(134, 23, 58), 'Color Major Bearish ChoCh Lines', group = 'Major Bearish "ChoCh" Lines')
+
+//Minor
+//Bullish
+MinorBuChoChLine_Show = input.string('Off', 'Show Minor Bullish ChoCh Lines', ['On', 'Off'], group = 'Minor Bullish "ChoCh" Lines')
+MinorBuChoChLine_Style = input.string(line.style_dashed, 'Style Minor Bullish ChoCh Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Minor Bullish "ChoCh" Lines')
+MinorBuChoChLine_Color = input.color(color.black, 'Color Minor Bullish ChoCh Lines', group = 'Minor Bullish "ChoCh" Lines')
+
+//Bearish           
+MinorBeChoChLine_Show = input.string('Off', 'Show Minor Bearish ChoCh Lines', ['On', 'Off'], group = 'Minor Bearish "ChoCh" Lines')
+MinorBeChoChLine_Style = input.string(line.style_dashed, 'Style Minor Bearish ChoCh Lines', [line.style_solid, line.style_dashed, line.style_dotted], group = 'Minor Bearish "ChoCh" Lines')
+MinorBeChoChLine_Color = input.color(color.black, 'Color Minor Bearish ChoCh Lines', group = 'Minor Bearish "ChoCh" Lines')
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//Variables
+
+//ZigZag Data
+Open = open
+High = high
+Low = low
+Close = close
+Bar_Index = bar_index
+ATR = ta.atr(55)
+var ArrayType = array.new_string()
+var ArrayValue = array.new_float()
+var ArrayIndex = array.new_int()
+var ArrayTypeAdv = array.new_string()
+var ArrayValueAdv = array.new_float()
+var ArrayIndexAdv = array.new_int()
+var line ZZLine = na
+var line Sline = na
+var line Rline = na
+var label Label = na
+PASS = 0
+HighPivot = ta.pivothigh(PP, PP)
+LowPivot = ta.pivotlow(PP, PP)
+HighValue = ta.valuewhen(bool(HighPivot), High[PP], 0)
+LowValue = ta.valuewhen(bool(LowPivot), Low[PP], 0)
+HighIndex = ta.valuewhen(bool(HighPivot), Bar_Index[PP], 0)
+LowIndex = ta.valuewhen(bool(LowPivot), Bar_Index[PP], 0)
+Correct_HighPivot = 0.0
+Correct_LowPivot = 0.0
+
+//Major Levels
+var float Major_HighLevel = na
+var float Major_LowLevel = na
+
+var int Major_HighIndex = na
+var int Major_LowIndex = na
+
+var string Major_HighType = na
+var string Major_LowType = na
+
+//Minor Levels
+var float Minor_HighLevel = na
+var float Minor_LowLevel = na
+
+var int Minor_HighIndex = na
+var int Minor_LowIndex = na
+
+var string Minor_HighType = na
+var string Minor_LowType = na
+
+var int LockDetecteM_MinorLvL = 0
+
+//
+var bool Lock0 = true
+var bool Lock1 = true
+
+// Detecte Major & Minor Pivot
+// Order Blocks Data
+//Major
+var int LastMHH = 0
+var int Last02MHH = 0
+var int LastMLH = 0
+
+var int LastMLL = 0
+var int Last02MLL = 0
+var int LastMHL = 0
+//Minor
+var int LastmHH = 0
+var int Last02mHH = 0
+var int LastmLH = 0
+
+var int LastmLL = 0
+var int Last02mLL = 0
+var int LastmHL = 0
+
+/////////////////////////////
+// Last Pivot First Point////
+/////////////////////////////
+var string LastPivotType = na
+var int LastPivotIndex = 0
+
+var string LastPivotType02 = na
+var int LastPivotIndex02 = 0
+
+//Major 01
+var float MajorHighValue01 = na
+var int MajorHighIndex01 = na
+var string MajorHighType01 = ''
+
+var float MajorLowValue01 = na
+var int MajorLowIndex01 = na
+var string MajorLowType01 = ''
+
+//Minor 01
+var float MinorHighValue01 = na
+var int MinorHighIndex01 = na
+var string MinorHighType01 = ''
+
+var float MinorLowValue01 = na
+var int MinorLowIndex01 = na
+var string MinorLowType01 = ''
+
+/////////////////////////////////////
+//One to the Last Pivot First Point//
+/////////////////////////////////////
+//Major 02
+var float MajorHighValue02 = na
+var int MajorHighIndex02 = na
+var string MajorHighType02 = ''
+
+var float MajorLowValue02 = na
+var int MajorLowIndex02 = na
+var string MajorLowType02 = ''
+
+//Minor 02
+var float MinorHighValue02 = na
+var int MinorHighIndex02 = na
+var string MinorHighType02 = ''
+
+var float MinorLowValue02 = na
+var int MinorLowIndex02 = na
+var string MinorLowType02 = ''
+
+//Major 02 Change Type Pivot
+var float MajorHighValue02Ch = na
+var int MajorHighIndex02Ch = na
+var string MajorHighType02Ch = ''
+
+var float MajorLowValue02Ch = na
+var int MajorLowIndex02Ch = na
+var string MajorLowType02Ch = ''
+
+//Lines Data
+var line MajorLine_ChoChBull = na
+var label MajorLabel_ChoChBull = na
+
+var line MajorLine_ChoChBear = na
+var label MajorLabel_ChoChBear = na
+
+var line MajorLine_BoSBull = na
+var label MajorLabel_BoSBull = na
+
+var line MajorLine_BoSBear = na
+var label MajorLabel_BoSBear = na
+
+var line MinorLine_ChoChBull = na
+var label MinorLabel_ChoChBull = na
+
+var line MinorLine_ChoChBear = na
+var label MinorLabel_ChoChBear = na
+
+var line MinorLine_BoSBull = na
+var label MinorLabel_BoSBull = na
+
+var line MinorLine_BoSBear = na
+var label MinorLabel_BoSBear = na
+
+// BoS & ChoCh Data
+//Major
+var bool Bullish_Major_ChoCh = false
+var bool Bullish_Major_BoS = false
+
+var bool Bearish_Major_ChoCh = false
+var bool Bearish_Major_BoS = false
+
+var BoS_MajorType = array.new_string()
+var BoS_MajorIndex = array.new_int()
+
+var ChoCh_MajorType = array.new_string()
+var ChoCh_MajorIndex = array.new_int()
+
+var int LockBreak_M = 0
+
+//Minor
+var bool Bullish_Minor_ChoCh = false
+var bool Bullish_Minor_BoS = false
+
+var bool Bearish_Minor_ChoCh = false
+var bool Bearish_Minor_BoS = false
+
+var BoS_MinorType = array.new_string()
+var BoS_MinorIndex = array.new_int()
+
+var ChoCh_MinorType = array.new_string()
+var ChoCh_MinorIndex = array.new_int()
+
+var int LockBreak_m = 0
+
+//Trend Data
+
+var string ExternalTrend = 'No Trend'
+var string InternalTrend = 'No Trend'
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////Calculation/////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//{Zig Zag}
+if bool(HighPivot) and bool(LowPivot)
+    if ArrayType.size() == 0
+        PASS := 1
+        PASS
+    else if ArrayType.size() >= 1
+        if ArrayType.get(ArrayType.size() - 1) == 'L' or ArrayType.get(ArrayType.size() - 1) == 'LL'
+            if LowPivot < ArrayValue.get(ArrayType.size() - 1)
+                array.remove(ArrayType, ArrayType.size() - 1)
+                array.remove(ArrayValue, ArrayValue.size() - 1)
+                array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                array.push(ArrayValue, LowValue)
+                array.push(ArrayIndex, LowIndex)
+                Correct_LowPivot := LowValue
+                Correct_LowPivot
+            else
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                array.push(ArrayValue, HighValue)
+                array.push(ArrayIndex, HighIndex)
+            Correct_HighPivot := HighValue
+            Correct_HighPivot
+        else if ArrayType.get(ArrayType.size() - 1) == 'H' or ArrayType.get(ArrayType.size() - 1) == 'HH'
+            if HighPivot > ArrayValue.get(ArrayType.size() - 1)
+                array.remove(ArrayType, ArrayType.size() - 1)
+                array.remove(ArrayValue, ArrayValue.size() - 1)
+                array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                array.push(ArrayValue, HighValue)
+                array.push(ArrayIndex, HighIndex)
+                Correct_HighPivot := HighValue
+                Correct_HighPivot
+            else
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                array.push(ArrayValue, LowValue)
+                array.push(ArrayIndex, LowIndex)
+            Correct_LowPivot := LowValue
+            Correct_LowPivot
+        else if ArrayType.get(ArrayType.size() - 1) == 'LH'
+            if HighPivot < ArrayValue.get(ArrayType.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                array.push(ArrayValue, LowValue)
+                array.push(ArrayIndex, LowIndex)
+                Correct_LowPivot := LowValue
+                Correct_LowPivot
+            else if HighPivot > ArrayValue.get(ArrayType.size() - 1)
+                if close < ArrayValue.get(ArrayType.size() - 1)
+                    array.remove(ArrayType, ArrayType.size() - 1)
+                    array.remove(ArrayValue, ArrayValue.size() - 1)
+                    array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                    array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                    array.push(ArrayValue, HighValue)
+                    array.push(ArrayIndex, HighIndex)
+                    Correct_HighPivot := HighValue
+                    Correct_HighPivot
+                else if close > ArrayValue.get(ArrayType.size() - 1)
+                    array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                    array.push(ArrayValue, LowValue)
+                    array.push(ArrayIndex, LowIndex)
+                    Correct_LowPivot := LowValue
+                    Correct_LowPivot
+        else if ArrayType.get(ArrayType.size() - 1) == 'HL'
+            if LowPivot > ArrayValue.get(ArrayType.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                array.push(ArrayValue, HighValue)
+                array.push(ArrayIndex, HighIndex)
+                Correct_HighPivot := HighValue
+                Correct_HighPivot
+            else if LowPivot < ArrayValue.get(ArrayType.size() - 1)
+                if close > ArrayValue.get(ArrayType.size() - 1)
+                    array.remove(ArrayType, ArrayType.size() - 1)
+                    array.remove(ArrayValue, ArrayValue.size() - 1)
+                    array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                    array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                    array.push(ArrayValue, LowValue)
+                    array.push(ArrayIndex, LowIndex)
+                    Correct_LowPivot := LowValue
+                    Correct_LowPivot
+                else if close < ArrayValue.get(ArrayType.size() - 1)
+                    array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                    array.push(ArrayValue, HighValue)
+                    array.push(ArrayIndex, HighIndex)
+                    Correct_HighPivot := HighValue
+                    Correct_HighPivot
+else if bool(HighPivot)
+    if ArrayType.size() == 0
+        array.insert(ArrayType, 0, 'H')
+        array.insert(ArrayValue, 0, HighValue)
+        array.insert(ArrayIndex, 0, HighIndex)
+        Correct_HighPivot := HighValue
+        Correct_HighPivot
+    else if ArrayType.size() >= 1
+        if ArrayType.get(ArrayType.size() - 1) == 'L' or ArrayType.get(ArrayType.size() - 1) == 'HL' or ArrayType.get(ArrayType.size() - 1) == 'LL'
+            if HighPivot > ArrayValue.get(ArrayType.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                array.push(ArrayValue, HighValue)
+                array.push(ArrayIndex, HighIndex)
+                Correct_HighPivot := HighValue
+                Correct_HighPivot
+            else if HighPivot < ArrayValue.get(ArrayType.size() - 1)
+                array.remove(ArrayType, ArrayType.size() - 1)
+                array.remove(ArrayValue, ArrayValue.size() - 1)
+                array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                array.push(ArrayValue, LowValue)
+                array.push(ArrayIndex, LowIndex)
+                Correct_LowPivot := LowValue
+                Correct_LowPivot
+        else if ArrayType.get(ArrayType.size() - 1) == 'H' or ArrayType.get(ArrayType.size() - 1) == 'HH' or ArrayType.get(ArrayType.size() - 1) == 'LH'
+            if ArrayValue.get(ArrayValue.size() - 1) < HighValue
+                array.remove(ArrayType, ArrayType.size() - 1)
+                array.remove(ArrayValue, ArrayValue.size() - 1)
+                array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                array.push(ArrayValue, HighValue)
+                array.push(ArrayIndex, HighIndex)
+                Correct_HighPivot := HighValue
+                Correct_HighPivot
+else if bool(LowPivot)
+    if ArrayType.size() == 0
+        array.insert(ArrayType, 0, 'L')
+        array.insert(ArrayValue, 0, LowValue)
+        array.insert(ArrayIndex, 0, LowIndex)
+        Correct_LowPivot := LowValue
+        Correct_LowPivot
+    else if ArrayType.size() >= 1
+        if ArrayType.get(ArrayType.size() - 1) == 'H' or ArrayType.get(ArrayType.size() - 1) == 'HH' or ArrayType.get(ArrayType.size() - 1) == 'LH'
+            if LowPivot < ArrayValue.get(ArrayType.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                array.push(ArrayValue, LowValue)
+                array.push(ArrayIndex, LowIndex)
+                Correct_LowPivot := LowValue
+                Correct_LowPivot
+            else if LowPivot > ArrayValue.get(ArrayType.size() - 1)
+                array.remove(ArrayType, ArrayType.size() - 1)
+                array.remove(ArrayValue, ArrayValue.size() - 1)
+                array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < HighValue ? 'HH' : 'LH' : 'H') ///////////////////////////////Here
+                array.push(ArrayValue, HighValue)
+                array.push(ArrayIndex, HighIndex)
+                Correct_HighPivot := HighValue
+                Correct_HighPivot
+        else if ArrayType.get(ArrayType.size() - 1) == 'L' or ArrayType.get(ArrayType.size() - 1) == 'HL' or ArrayType.get(ArrayType.size() - 1) == 'LL'
+            if ArrayValue.get(ArrayValue.size() - 1) > LowValue
+                array.remove(ArrayType, ArrayType.size() - 1)
+                array.remove(ArrayValue, ArrayValue.size() - 1)
+                array.remove(ArrayIndex, ArrayIndex.size() - 1)
+                array.push(ArrayType, ArrayType.size() > 2 ? ArrayValue.get(ArrayType.size() - 2) < LowValue ? 'HL' : 'LL' : 'L') ///////////////////////////////Here
+                array.push(ArrayValue, LowValue)
+                array.push(ArrayIndex, LowIndex)
+                Correct_LowPivot := LowValue
+                Correct_LowPivot
+
+//{Zig Zag Advance}
+
+//first Major & Minor Detector
+if ArrayType.size() == 2
+    if ArrayType.get(0) == 'H'
+        Major_HighLevel := ArrayValue.get(0)
+        Major_LowLevel := ArrayValue.get(1)
+        Major_HighIndex := ArrayIndex.get(0)
+        Major_LowIndex := ArrayIndex.get(1)
+        Major_HighType := ArrayType.get(0)
+        Major_LowType := ArrayType.get(1)
+        Major_LowType
+    else if ArrayType.get(0) == 'L'
+        Major_HighLevel := ArrayValue.get(1)
+        Major_LowLevel := ArrayValue.get(0)
+        Major_HighIndex := ArrayIndex.get(1)
+        Major_LowIndex := ArrayIndex.get(0)
+        Major_HighType := ArrayType.get(1)
+        Major_LowType := ArrayType.get(0)
+        Major_LowType
+
+//Making Copies of Arrays
+
+
+if ArrayValue.size() == 1
+    if Lock0
+        array.insert(ArrayTypeAdv, 0, 'M' + ArrayType.get(0))
+        array.insert(ArrayValueAdv, 0, ArrayValue.get(0))
+        array.insert(ArrayIndexAdv, 0, ArrayIndex.get(0))
+        Lock0 := false
+        Lock0
+
+if ArrayValue.size() == 2
+    if Lock1
+        array.insert(ArrayTypeAdv, 1, 'M' + ArrayType.get(1))
+        array.insert(ArrayValueAdv, 1, ArrayValue.get(1))
+        array.insert(ArrayIndexAdv, 1, ArrayIndex.get(1))
+        Lock1 := false
+        Lock1
+
+if ArrayValue.size() > 1
+    if ArrayValue.get(ArrayValue.size() - 1)[1] != ArrayValue.get(ArrayValue.size() - 1)
+        if str.substring(ArrayType.get(ArrayType.size() - 1)[1], str.length(ArrayType.get(ArrayType.size() - 1)) - 1) != str.substring(ArrayType.get(ArrayType.size() - 1), str.length(ArrayType.get(ArrayType.size() - 1)) - 1)
+            array.push(ArrayTypeAdv, 'm' + ArrayType.get(ArrayType.size() - 1))
+            array.push(ArrayValueAdv, ArrayValue.get(ArrayValue.size() - 1))
+            array.push(ArrayIndexAdv, ArrayIndex.get(ArrayIndex.size() - 1))
+        else if str.substring(ArrayType.get(ArrayType.size() - 1)[1], str.length(ArrayType.get(ArrayType.size() - 1)) - 1) == str.substring(ArrayType.get(ArrayType.size() - 1), str.length(ArrayType.get(ArrayType.size() - 1)) - 1)
+            array.remove(ArrayValueAdv, ArrayValueAdv.size() - 1)
+            array.remove(ArrayIndexAdv, ArrayIndexAdv.size() - 1)
+            array.push(ArrayValueAdv, ArrayValue.get(ArrayValue.size() - 1))
+            array.push(ArrayIndexAdv, ArrayIndex.get(ArrayIndex.size() - 1))
+
+//All Major & Minor Pivot Detector 
+
+if ArrayValueAdv.size() > 1
+    //High Major Detector
+    if close > Major_HighLevel
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mL'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('ML')
+            Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_LowType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHL'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_LowType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLL'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_LowType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLH' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHH' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MLH' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MHH'
+            if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mHL'
+                ArrayTypeAdv.remove(ArrayTypeAdv.size() - 2)
+                ArrayTypeAdv.insert(ArrayValueAdv.size() - 2, 'M' + ArrayType.get(ArrayType.size() - 2))
+                Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Major_LowType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mLL'
+                ArrayTypeAdv.remove(ArrayTypeAdv.size() - 2)
+                ArrayTypeAdv.insert(ArrayValueAdv.size() - 2, 'M' + ArrayType.get(ArrayType.size() - 2))
+                Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Major_LowType
+
+    if ArrayValueAdv.get(ArrayValueAdv.size() - 1) > Major_HighLevel
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mH'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('MH')
+            Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_HighType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLH'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_HighType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHH' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MHH'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_HighType
+
+    //Low Major Detector
+    if close < Major_LowLevel
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mH'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('MH')
+            Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_HighType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLH'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_HighType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHH'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_HighType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHL' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLL' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MHL' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MLL'
+            if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mLH'
+                ArrayTypeAdv.remove(ArrayTypeAdv.size() - 2)
+                ArrayTypeAdv.insert(ArrayValueAdv.size() - 2, 'M' + ArrayType.get(ArrayType.size() - 2))
+                Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Major_HighType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mHH'
+                ArrayTypeAdv.remove(ArrayTypeAdv.size() - 2)
+                ArrayTypeAdv.insert(ArrayValueAdv.size() - 2, 'M' + ArrayType.get(ArrayType.size() - 2))
+                Major_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Major_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Major_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Major_HighType
+
+    if ArrayValueAdv.get(ArrayValueAdv.size() - 1) < Major_LowLevel
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mL'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('ML')
+            Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_LowType
+
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHL'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_LowType
+        else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLL' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MLL'
+            ArrayTypeAdv.remove(ArrayTypeAdv.size() - 1)
+            ArrayTypeAdv.push('M' + ArrayType.get(ArrayType.size() - 1))
+            Major_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+            Major_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+            Major_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Major_LowType
+
+if ArrayTypeAdv.size() >= 2
+    X1 = ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+    Y1 = ArrayValueAdv.get(ArrayIndexAdv.size() - 2)
+    X2 = ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+    Y2 = ArrayValueAdv.get(ArrayIndexAdv.size() - 1)
+    T1 = ArrayTypeAdv.get(ArrayIndexAdv.size() - 1)
+
+    ZZLine := line.new(X1, Y1, X2, Y2, color = ShZ ? ZLC : #ffffff00, style = ZLS, width = ZLW)
+    if ShL == true
+        Label := label.new(x = X2, y = Y2, text = T1, color = color.rgb(255, 255, 255, 100), style = T1 == 'L' or T1 == 'LL' or T1 == 'HL' or T1 == 'mL' or T1 == 'mLL' or T1 == 'mHL' or T1 == 'ML' or T1 == 'MLL' or T1 == 'MHL' ? label.style_label_up : label.style_label_down, textcolor = LC, size = size.normal)
+        Label
+    if line.get_x1(ZZLine) == line.get_x1(ZZLine[1])
+        label.delete(Label[1])
+        line.delete(ZZLine[1])
+    if Label.get_text()[1] != Label.get_text()[1]
+        Label.set_text('0')
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//Get Pivot Data
+//Last Pivot Data
+if ArrayTypeAdv.size() > 1
+    LastPivotType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+    LastPivotIndex := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+    LastPivotType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+    LastPivotIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+    //Major
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MHH'
+        MajorHighValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MajorHighIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MajorHighType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastMHH := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastMHH
+
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MLH'
+        MajorHighValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MajorHighIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MajorHighType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastMLH := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastMLH
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MLL'
+        MajorLowValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MajorLowIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MajorLowType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastMLL := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastMLL
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'MHL'
+        MajorLowValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MajorLowIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MajorLowType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastMHL := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastMHL
+
+    //Minor
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHH'
+        MinorHighValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MinorHighIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MinorHighType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastmHH := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastmHH
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLH'
+        MinorHighValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MinorHighIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MinorHighType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastmLH := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastmLH
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLL'
+        MinorLowValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MinorLowIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MinorLowType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastmLL := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastmLL
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHL'
+        MinorLowValue01 := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+        MinorLowIndex01 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        MinorLowType01 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+        LastmHL := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+        LastmHL
+
+//One to the Last Pivot Data
+if ArrayTypeAdv.size() > 1
+    //Major
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MHH'
+        MajorHighValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MajorHighIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MajorHighType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MajorHighType02
+
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MLH'
+        MajorHighValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MajorHighIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MajorHighType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MajorHighType02
+
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MLL'
+        MajorLowValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MajorLowIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MajorLowType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MajorLowType02
+
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MHL'
+        MajorLowValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MajorLowIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MajorLowType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MajorLowType02
+
+
+    //Minor
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mHH'
+        MinorHighValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MinorHighIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MinorHighType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MinorHighType02
+
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mLH'
+        MinorHighValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MinorHighIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MinorHighType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MinorHighType02
+
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mLL'
+        MinorLowValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MinorLowIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MinorLowType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MinorLowType02
+
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mHL'
+        MinorLowValue02 := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+        MinorLowIndex02 := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+        MinorLowType02 := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+        MinorLowType02
+
+    // Change Pivot Type to Major
+    if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) != ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)[1] // Change Pivot Type to Major
+        //Major
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MHH'
+            MajorHighValue02Ch := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+            MajorHighIndex02Ch := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+            MajorHighType02Ch := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+            MajorHighType02Ch
+
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MLH'
+            MajorHighValue02Ch := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+            MajorHighIndex02Ch := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+            MajorHighType02Ch := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+            MajorHighType02Ch
+
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MLL'
+            MajorLowValue02Ch := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+            MajorLowIndex02Ch := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+            MajorLowType02Ch := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+            MajorLowType02Ch
+
+        if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'MHL'
+            MajorLowValue02Ch := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+            MajorLowIndex02Ch := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+            MajorLowType02Ch := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+            MajorLowType02Ch
+
+// Detecte Minor level
+
+if ArrayTypeAdv.size() > 2
+    LockDetecteM_MinorLvL := 1
+    if str.pos(ArrayTypeAdv.get(ArrayTypeAdv.size() - 1), 'm') == 0 and str.pos(ArrayTypeAdv.get(ArrayTypeAdv.size() - 2), 'm') == 0 and str.pos(ArrayTypeAdv.get(ArrayTypeAdv.size() - 3), 'M') == 0
+        if str.pos(ArrayTypeAdv.get(ArrayTypeAdv.size() - 1), 'H') == 2
+            Minor_HighLevel := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+            Minor_LowLevel := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+            Minor_HighIndex := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+            Minor_LowIndex := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+            Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+            Minor_LowType
+        else if str.pos(ArrayTypeAdv.get(ArrayTypeAdv.size() - 1), 'L') == 2
+            Minor_HighLevel := ArrayValueAdv.get(ArrayTypeAdv.size() - 2)
+            Minor_LowLevel := ArrayValueAdv.get(ArrayTypeAdv.size() - 1)
+            Minor_HighIndex := ArrayIndexAdv.get(ArrayTypeAdv.size() - 2)
+            Minor_LowIndex := ArrayIndexAdv.get(ArrayTypeAdv.size() - 1)
+            Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+            Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+            Minor_LowType
+    if LockDetecteM_MinorLvL == 1
+        //High Minor Detector
+        if close > Minor_HighLevel
+
+            if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHL'
+                Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_LowType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLL'
+                Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_LowType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLH' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHH'
+                if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mHL'
+                    Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                    Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                    Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                    Minor_LowType
+                else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mLL'
+                    Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                    Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                    Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                    Minor_LowType
+
+
+        if ArrayValueAdv.get(ArrayValueAdv.size() - 1) > Minor_HighLevel
+
+            if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLH'
+                Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Minor_LowType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHH'
+                Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Minor_LowType
+
+        //Low Minor Detector
+        if close < Minor_LowLevel
+
+            if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLH'
+                Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_HighType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHH'
+                Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_HighType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHL' or ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLL'
+                if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mLH'
+                    Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                    Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                    Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                    Minor_HighType
+                else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 2) == 'mHH'
+                    Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                    Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                    Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                    Minor_HighType
+
+        if ArrayValueAdv.get(ArrayValueAdv.size() - 1) < Minor_LowLevel
+            if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mHL'
+                Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Minor_HighType
+            else if ArrayTypeAdv.get(ArrayTypeAdv.size() - 1) == 'mLL'
+                Minor_LowLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 1)
+                Minor_LowIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 1)
+                Minor_LowType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 1)
+                Minor_HighLevel := ArrayValueAdv.get(ArrayValueAdv.size() - 2)
+                Minor_HighIndex := ArrayIndexAdv.get(ArrayIndexAdv.size() - 2)
+                Minor_HighType := ArrayTypeAdv.get(ArrayTypeAdv.size() - 2)
+                Minor_HighType
+
+    //Reset Minor Levels
+    if str.pos(ArrayTypeAdv.get(ArrayTypeAdv.size() - 1), 'M') == 0
+        LockDetecteM_MinorLvL := 0
+        Minor_HighLevel := na
+        Minor_LowLevel := na
+        Minor_HighIndex := na
+        Minor_LowIndex := na
+        Minor_HighType := na
+        Minor_LowType := na
+        InternalTrend := 'No Trend'
+        InternalTrend
+
+
+//ChoCh and BoS Detector
+//Bos and ChoCh Line
+//Major
+
+if ta.crossover(close, Major_HighLevel) and LockBreak_M != Major_HighIndex // Bullish BoS Detector
+    if ExternalTrend == 'No Trend' or ExternalTrend == 'Up Trend'
+        Bullish_Major_BoS := true
+        BoS_MajorType.push('Bull Major BoS')
+        BoS_MajorIndex.push(bar_index)
+        LockBreak_M := Major_HighIndex
+        ExternalTrend := 'Up Trend'
+        if MajorBuBoSLine_Show == 'On'
+            MajorLine_BoSBull := line.new(Major_HighIndex, Major_HighLevel, bar_index, Major_HighLevel, style = MajorBuBoSLine_Style, color = MajorBuBoSLine_Color)
+            MajorLabel_BoSBull := label.new((Major_HighIndex + bar_index) / 2, Major_HighLevel, text = 'Major BoS', color = color.rgb(0, 0, 0, 100), textcolor = MajorBuBoSLine_Color, size = size.normal)
+            MajorLabel_BoSBull
+    else if ExternalTrend == 'Down Trend' // Bullish ChoCh Detector
+        Bullish_Major_ChoCh := true
+        ChoCh_MajorType.push('Bull Major ChoCh')
+        ChoCh_MajorIndex.push(bar_index)
+        LockBreak_M := Major_HighIndex
+        ExternalTrend := 'Up Trend'
+        if MajorBuChoChLine_Show == 'On'
+            MajorLine_ChoChBull := line.new(Major_HighIndex, Major_HighLevel, bar_index, Major_HighLevel, style = MajorBuChoChLine_Style, color = MajorBuChoChLine_Color)
+            MajorLabel_ChoChBull := label.new((Major_HighIndex + bar_index) / 2, Major_HighLevel, text = 'Major ChoCh', color = color.rgb(0, 0, 0, 100), textcolor = MajorBuChoChLine_Color, size = size.normal)
+            MajorLabel_ChoChBull
+else
+    Bullish_Major_ChoCh := false
+    Bullish_Major_BoS := false
+    Bullish_Major_BoS
+
+
+if ta.crossunder(close, Major_LowLevel) and LockBreak_M != Major_LowIndex // Bearish BoS Detector
+    if ExternalTrend == 'No Trend' or ExternalTrend == 'Down Trend'
+        Bearish_Major_BoS := true
+        BoS_MajorType.push('Bear Major BoS')
+        BoS_MajorIndex.push(bar_index)
+        LockBreak_M := Major_LowIndex
+        ExternalTrend := 'Down Trend'
+        if MajorBeBoSLine_Show == 'On'
+            MajorLine_BoSBear := line.new(Major_LowIndex, Major_LowLevel, bar_index, Major_LowLevel, style = MajorBeBoSLine_Style, color = MajorBeBoSLine_Color)
+            MajorLabel_BoSBear := label.new((Major_LowIndex + bar_index) / 2, Major_LowLevel, text = 'Major BoS', color = color.rgb(0, 0, 0, 100), textcolor = MajorBeBoSLine_Color, style = label.style_label_up, size = size.normal)
+            MajorLabel_BoSBear
+    else if ExternalTrend == 'Up Trend' // Bearish ChoCh Detector
+        Bearish_Major_ChoCh := true
+        ChoCh_MajorType.push('Bear Major ChoCh')
+        ChoCh_MajorIndex.push(bar_index)
+        LockBreak_M := Major_LowIndex
+        ExternalTrend := 'Down Trend'
+        if MajorBeChoChLine_Show == 'On'
+            MajorLine_ChoChBear := line.new(Major_LowIndex, Major_LowLevel, bar_index, Major_LowLevel, style = MajorBeChoChLine_Style, color = MajorBeChoChLine_Color)
+            MajorLabel_ChoChBear := label.new((Major_LowIndex + bar_index) / 2, Major_LowLevel, text = 'Major ChoCh', color = color.rgb(0, 0, 0, 100), textcolor = MajorBeChoChLine_Color, style = label.style_label_up, size = size.normal)
+            MajorLabel_ChoChBear
+else
+    Bearish_Major_ChoCh := false
+    Bearish_Major_BoS := false
+    Bearish_Major_BoS
+
+
+//Minor
+
+if Minor_HighLevel < close and LockBreak_m != Minor_HighIndex // Bullish BoS Detector
+    if InternalTrend == 'No Trend' or InternalTrend == 'Up Trend'
+        Bullish_Minor_BoS := true
+        BoS_MinorType.push('Bull Minor BoS')
+        BoS_MinorIndex.push(bar_index)
+        LockBreak_m := Minor_HighIndex
+        InternalTrend := 'Up Trend'
+        if MinorBuBoSLine_Show == 'On'
+            MinorLine_BoSBull := line.new(Minor_HighIndex, Minor_HighLevel, bar_index, Minor_HighLevel, style = MinorBuBoSLine_Style, color = MinorBuBoSLine_Color)
+            MinorLabel_BoSBull := label.new((Minor_HighIndex + bar_index) / 2, Minor_HighLevel, text = 'Minor BoS', color = color.rgb(0, 0, 0, 100), textcolor = MinorBuBoSLine_Color, size = size.normal)
+            MinorLabel_BoSBull
+    else if InternalTrend == 'Down Trend' // Bullish ChoCh Detector
+        Bullish_Minor_ChoCh := true
+        ChoCh_MinorType.push('Bull Minor ChoCh')
+        ChoCh_MinorIndex.push(bar_index)
+        LockBreak_m := Minor_HighIndex
+        InternalTrend := 'Up Trend'
+        if MinorBuChoChLine_Show == 'On'
+            MinorLine_ChoChBull := line.new(Minor_HighIndex, Minor_HighLevel, bar_index, Minor_HighLevel, style = MinorBuChoChLine_Style, color = MinorBuChoChLine_Color)
+            MinorLabel_ChoChBull := label.new((Minor_HighIndex + bar_index) / 2, Minor_HighLevel, text = 'Minor ChoCh', color = color.rgb(0, 0, 0, 100), textcolor = MinorBuChoChLine_Color, size = size.normal)
+            MinorLabel_ChoChBull
+else
+    Bullish_Minor_ChoCh := false
+    Bullish_Minor_BoS := false
+    Bullish_Minor_BoS
+
+
+if Minor_LowLevel > close and LockBreak_m != Minor_LowIndex // Bearish BoS Detector
+    if InternalTrend == 'No Trend' or InternalTrend == 'Down Trend'
+        Bearish_Minor_BoS := true
+        BoS_MinorType.push('Bear Minor BoS')
+        BoS_MinorIndex.push(bar_index)
+        LockBreak_m := Minor_LowIndex
+        InternalTrend := 'Down Trend'
+        if MinorBeBoSLine_Show == 'On'
+            MinorLine_BoSBear := line.new(Minor_LowIndex, Minor_LowLevel, bar_index, Minor_LowLevel, style = MinorBeBoSLine_Style, color = MinorBeBoSLine_Color)
+            MinorLabel_BoSBear := label.new((Minor_LowIndex + bar_index) / 2, Minor_LowLevel, text = 'Minor BoS', color = color.rgb(0, 0, 0, 100), textcolor = MinorBeBoSLine_Color, style = label.style_label_up, size = size.normal)
+            MinorLabel_BoSBear
+    else if InternalTrend == 'Up Trend' // Bearish ChoCh Detector
+        Bearish_Minor_ChoCh := true
+        ChoCh_MinorType.push('Bear Minor ChoCh')
+        ChoCh_MinorIndex.push(bar_index)
+        LockBreak_m := Minor_LowIndex
+        InternalTrend := 'Down Trend'
+        if MinorBeChoChLine_Show == 'On'
+            MinorLine_ChoChBear := line.new(Minor_LowIndex, Minor_LowLevel, bar_index, Minor_LowLevel, style = MinorBeChoChLine_Style, color = MinorBeChoChLine_Color)
+            MinorLabel_ChoChBear := label.new((Minor_LowIndex + bar_index) / 2, Minor_LowLevel, text = 'Minor ChoCh', color = color.rgb(0, 0, 0, 100), textcolor = MinorBeChoChLine_Color, style = label.style_label_up, size = size.normal)
+            MinorLabel_ChoChBear
+else
+    Bearish_Minor_ChoCh := false
+    Bearish_Minor_BoS := false
+    Bearish_Minor_BoS
+
+// ================================================================
+// MARKET STRUCTURE CHoCH / BoS  (Change of Character and Break of Structure)
+// with credit to LuxAlgo's Market Structure CHoCH/BOS (Fractal) [LuxAlgo]
+// ================================================================
+
+//------------------------------------------------------------------------------
+// Settings
+//-----------------------------------------------------------------------------{
+length = input.int(5, minval = 3)
+
+//Colors
+showBull = input(true, 'Bullish Structures', inline = 'bull', group = 'Style')
+bullCss = input.color(#089981, '', inline = 'bull', group = 'Style')
+
+showBear = input(true, 'Bearish Structures', inline = 'bear', group = 'Style')
+bearCss = input.color(#f23645, '', inline = 'bear', group = 'Style')
+
+showSupport = input(false, 'Support', inline = 's', group = 'Style')
+supCss = input.color(#089981, '', inline = 's', group = 'Style')
+
+showResistance = input(false, 'Resistance', inline = 'r', group = 'Style')
+resCss = input.color(#f23645, '', inline = 'r', group = 'Style')
+
+// //Dashboard
+// showDash = input(false, 'Show Dashboard', group = 'Dashboard')
+// dashLoc = input.string('Top Right', 'Location', options = ['Top Right', 'Bottom Right', 'Bottom Left'], group = 'Dashboard')
+// textSize = input.string('Small', 'Size', options = ['Tiny', 'Small', 'Normal'], group = 'Dashboard')
+
+//-----------------------------------------------------------------------------}
+//Types
+//-----------------------------------------------------------------------------{
+type fractal
+	float value
+	int loc
+	bool iscrossed
+
+//-----------------------------------------------------------------------------}
+//Fractal Detection
+//-----------------------------------------------------------------------------{
+var p = int(length / 2)
+num_bars = bar_index
+
+dh = math.sum(math.sign(high - high[1]), p)
+dl = math.sum(math.sign(low - low[1]), p)
+
+bullf = dh == -p and dh[p] == p and high[p] == ta.highest(length)
+bearf = dl == p and dl[p] == -p and low[p] == ta.lowest(length)
+
+bullf_count = ta.cum(bullf ? 1 : 0)
+bearf_count = ta.cum(bearf ? 1 : 0)
+
+//-----------------------------------------------------------------------------}
+//Bullish market structure
+//-----------------------------------------------------------------------------{
+var upper = fractal.new()
+var line lower_lvl = na
+var label ms_lbl = na
+var bull_ms_count = 0
+var broken_sup = false
+var os = 0
+
+if bullf
+    upper.value := high[p]
+    upper.loc := num_bars - p
+    upper.iscrossed := false
+    upper.iscrossed
+
+if ta.crossover(close, upper.value) and not upper.iscrossed
+    line.new(upper.loc, upper.value, num_bars, upper.value, color = showBull ? bullCss : na)
+
+    ms_lbl := label.new(int(math.avg(num_bars, upper.loc)), upper.value, os == -1 ? 'ChoCH' : 'BOS', color = color(na), textcolor = showBull ? bullCss : na, style = label.style_label_down, size = size.normal)
+
+    //Set support
+    k = 2
+    min = low[1]
+    for i = 2 to num_bars - upper.loc - 1 by 1
+        min := math.min(low[i], min)
+        k := low[i] == min ? i : k
+        k
+
+    if showSupport
+        lower_lvl := line.new(num_bars - k, min, num_bars, min, color = bullCss, style = line.style_dashed)
+        broken_sup := false
+        broken_sup
+
+    upper.iscrossed := true
+    bull_ms_count := bull_ms_count + 1
+    os := 1
+    os
+
+else if showSupport and not broken_sup
+    lower_lvl.set_x2(num_bars)
+
+    if close < lower_lvl.get_y2()
+        broken_sup := true
+        broken_sup
+
+//-----------------------------------------------------------------------------}
+//Bearish market structure
+//-----------------------------------------------------------------------------{
+var lower = fractal.new()
+var line upper_lvl = na
+var broken_res = false
+var bear_ms_count = 0
+
+if bearf
+    lower.value := low[p]
+    lower.loc := num_bars - p
+    lower.iscrossed := false
+    lower.iscrossed
+
+if ta.crossunder(close, lower.value) and not lower.iscrossed
+    line.new(lower.loc, lower.value, num_bars, lower.value, color = showBear ? bearCss : na)
+
+    label.new(int(math.avg(num_bars, lower.loc)), lower.value, os == 1 ? 'ChoCH' : 'BOS', color = color(na), textcolor = showBear ? bearCss : na, style = label.style_label_up, size = size.normal)
+
+    //Set resistance
+    k = 2
+    max = high[1]
+    for i = 2 to num_bars - lower.loc - 1 by 1
+        max := math.max(high[i], max)
+        k := high[i] == max ? i : k
+        k
+
+    if showResistance
+        upper_lvl := line.new(num_bars - k, max, num_bars, max, color = bearCss, style = line.style_dashed)
+        broken_res := false
+        broken_res
+
+    lower.iscrossed := true
+    bear_ms_count := bear_ms_count + 1
+    os := -1
+    os
+
+else if showResistance and not broken_res
+    upper_lvl.set_x2(num_bars)
+
+    if close > upper_lvl.get_y2()
+        broken_res := true
+        broken_res
+
+
+
+// ========================================================================================
+// EMAs ALIGNED 
+// a little someting I thought of for added confluence
+// confirms whether the first three emas (default 9, 21, and 50) are ordered
+// ========================================================================================
+
+// Function to check EMA order using the current chart timeframe
+checkEMAOrder() =>
+    ema9 = ta.ema(close, 9)
+    ema13 = ta.ema(close, 13)
+    ema21 = ta.ema(close, 21)
+    ema50 = ta.ema(close, 50)
+    isbullish_EMA = ema9 > ema13 and ema13 > ema21 and ema21 > ema50
+    isbearish_EMA = ema9 < ema13 and ema13 < ema21 and ema21 < ema50
+    [isbullish_EMA, isbearish_EMA]
+
+// Get EMA order for current timeframe
+[isbullish_EMA, isbearish_EMA] = checkEMAOrder()
+
+// Assign icons and colors
+getIconAndColor(bullish, bearish) =>
+    icon = bullish ? "▲" : bearish ? "▼" : "No"
+    bgColor = bullish ? color.green : bearish ? color.red : color.gray
+    [icon, bgColor]
+
+[icon, bg] = getIconAndColor(isbullish_EMA, isbearish_EMA)
+
+
+// ================================================================
+// SUPERTREND INDICATOR
+// with credit to KivancOzbiligic's 2021 Supertrend
+// ================================================================
+
+show_SuperTrend = input.bool(true, title='Show SuperTrend lines', group="SuperTrend") 
+Periods         = input.int(10, title='ATR Period', group="SuperTrend")
+src             = input.source(hl2, title='Source', group="SuperTrend")
+Multiplier      = input.float(3.0, title='ATR Multiplier', step=0.1, group="SuperTrend")
+changeATR       = input.bool(true, title='Change ATR Calculation Method?', group="SuperTrend")
+showsignals     = input.bool(true, title='Show Buy/Sell Signals?', group="SuperTrend")
+
+atr2            = ta.sma(ta.tr, Periods)
+atr_SuperTrend  = changeATR ? ta.atr(Periods) : atr2  // ta.tr is calculated as math.max(high - low, math.abs(high - close[1]), math.abs(low - close[1]))
+
+up  = src - Multiplier * atr_SuperTrend
+up1 = nz(up[1], up)
+up  := close[1] > up1 ? math.max(up, up1) : up
+
+dn  = src + Multiplier * atr_SuperTrend
+dn1 = nz(dn[1], dn)
+dn  := close[1] < dn1 ? math.min(dn, dn1) : dn
+
+// Initialize and update trend
+Suprtrend    = 1
+Suprtrend    := nz(Suprtrend[1], Suprtrend)
+Suprtrend    := Suprtrend == -1 and close > dn1 ? 1 : Suprtrend == 1 and close < up1 ? -1 : Suprtrend
+
+// Plot up and down lines only if show_SuperTrend is true
+upPlot = plot(show_SuperTrend and Suprtrend == 1 ? up : na, title='Up Trend', style=plot.style_linebr, linewidth=2, color=color.rgb(76, 175, 79, 50))
+dnPlot = plot(show_SuperTrend and Suprtrend == 1 ? na : dn, title='Down Trend', style=plot.style_linebr, linewidth=2, color=color.rgb(255, 82, 82, 50))
+
+// Buy signal shapes
+buySignal = Suprtrend == 1 and Suprtrend[1] == -1
+plotshape(show_SuperTrend and buySignal ? up : na, title='UpTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.green)
+plotshape(show_SuperTrend and buySignal and showsignals ? up : na, title='Buy', text='ST Buy', location=location.absolute, style=shape.labelup, size=size.tiny, color=color.green, textcolor=color.white)
+
+// Sell signal shapes
+sellSignal = Suprtrend == -1 and Suprtrend[1] == 1
+plotshape(show_SuperTrend and sellSignal ? dn : na, title='DownTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.red)
+plotshape(show_SuperTrend and sellSignal and showsignals ? dn : na, title='Sell', text='ST Sell', location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.red, textcolor=color.white)
+
+// A dummy plot to serve as a reference for fill()
+mPlot = plot(ohlc4, title='', style=plot.style_circles, linewidth=math.max(1, 0))
+
+// Define fill colors based on the trend
+longFillColor  = Suprtrend == 1 ? color.rgb(76, 175, 79, 89)   : color.rgb(255, 255, 255, 97)
+shortFillColor = Suprtrend == -1 ? color.rgb(255, 82, 82, 89)   : color.rgb(255, 255, 255, 97)
+
+// Apply fills only when show_SuperTrend is true by conditionally setting the color
+fill(mPlot, upPlot, title='UpTrend Highlighter', color= show_SuperTrend ? longFillColor  : na)
+fill(mPlot, dnPlot, title='DownTrend Highlighter', color= show_SuperTrend ? shortFillColor : na)
+
+
+
+alertcondition(buySignal, title = 'SuperTrend Buy', message = 'SuperTrend Buy!')
+alertcondition(sellSignal, title = 'SuperTrend Sell', message = 'SuperTrend Sell!')
+changeCond = Suprtrend != Suprtrend[1]
+alertcondition(changeCond, title = 'SuperTrend Direction Change', message = 'SuperTrend has changed direction!')
+
+
+// Define Bullish Bearish Supertrend and Assign icobs and colors
+isbullish_SupTrnd = Suprtrend == 1
+isbearish_SupTrnd = Suprtrend == -1
+
+// Assign icons and colors
+getIconAndColor_ST(bullish_ST, bearish_ST) =>
+    icon_ST = bullish_ST ? "▲" : bearish_ST ? "▼" : "--"
+    bgColor_ST = bullish_ST ? color.green : bearish_ST ? color.red : color.gray
+    [icon_ST, bgColor_ST]
+
+[icon_ST, bgColor_ST] = getIconAndColor_ST(isbullish_SupTrnd, isbearish_SupTrnd)
+
+
+// ================================================================
+// COMMODITY CHANNEL INDEX WITH BOLLINGER BANDS
+// with credit to DreadBlitz's 2019 Bollinger Bands on MACD
+// ================================================================
+
+// Inputs
+cciLength = input.int(20, "CCI Length", group = "Commodity Channgel Index Settings")
+stdv = input.float(0.8, "CCI Stdv", group = "Commodity Channgel Index Settings")
+sdevLength = input.int(9, "CCI SDev Length", group = "Commodity Channgel Index Settings")
+
+// CCI Calculation
+CCI = math.round(ta.cci(close, cciLength))
+Avg_CCI = ta.ema(CCI, 9)
+SDev = ta.stdev(CCI, sdevLength)
+
+// Bollinger Bands on CCI
+upper_CCI_band = Avg_CCI + stdv * SDev
+lower_CCI_band = Avg_CCI - stdv * SDev
+
+// First derivative of CCI (CCI speed)
+CCI_speed = math.round(CCI - math.round(ta.cci(close[1], cciLength)))
+
+// Define bullish and bearish conditions
+isbullishCCI = CCI > upper_CCI_band
+isbearishCCI = CCI < lower_CCI_band
+
+// Function to get icons and background colors
+getIconAndColor_CCI(bullish, bearish) =>
+    icon_CCI = bullish ? "▲" : bearish ? "▼" : "--"
+    bgColor_CCI = bullish ? color.green : bearish ? color.red : color.gray
+    [icon_CCI, bgColor_CCI]
+
+[icon_CCI, bgColor_CCI] = getIconAndColor_CCI(isbullishCCI, isbearishCCI)
+
+// Background color logic for CCI and CCI Speed
+bgColor_CCI_Value = CCI > 80 ? color.green : CCI < -80 ? color.red : color.gray
+bgColor_CCI_Speed = CCI_speed > 0 ? color.green : CCI_speed < 0 ? color.red : color.gray
+
+// Color Logic
+pcol = isbearishCCI ? color.red : isbullishCCI ? color.green : color.blue
+
+
+// ====================================================================================================
+// THE INDICATOR TABLE: EMA ALIGNMENT, SUPERTREND, AND CCI-BASED VALUES FOR IMPULSE SPEED AND MOMENTUM
+// ====================================================================================================
+
+atrLength = input.int(10,"ATR lookback period (days)", group = 'Daily ATR lookback period')
+// --- ATR Calculation (Daily Time Frame) ---
+atrValue = request.security(syminfo.tickerid, "D", ta.atr(atrLength))
+
+// Table Size Selection
+tableSizeInput = input.string('Medium', title = 'Table Size', options = ['Small', 'Medium', 'Large'], group ='Indicator Table')
+
+// Table Position Selection
+tablePositionInput = input.string('Bottom Right', title = 'Table Position', options = ['Top Left', 'Top Right', 'Bottom Left', 'Bottom Right'], group ='Indicator Table')
+
+// Function to convert user selection into `position` enum
+getTablePosition(pos) =>
+    pos == 'Top Left' ? position.top_left : pos == 'Top Right' ? position.top_right : pos == 'Bottom Left' ? position.bottom_left : position.bottom_right // Default
+
+// Function to convert size selection into size enum
+getTextSize(tableSizeInput) =>
+    tableSizeInput == "Small" ? size.small : tableSizeInput == "Large" ? size.large : size.normal
+
+
+var table indicator_table = table.new(position=getTablePosition(tablePositionInput), columns=2, rows=6, bgcolor=color.gray)
+textSize_Indicator_table = getTextSize(tableSizeInput)
+table.cell(indicator_table, 0, 0, "EMAs Aligned", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 0, icon, text_color=color.black, bgcolor=bg, text_size=textSize_Indicator_table)
+
+table.cell(indicator_table, 0, 1, "Supertrend", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 1, icon_ST, text_color=color.black, bgcolor=bgColor_ST, text_size=textSize_Indicator_table)
+
+table.cell(indicator_table, 0, 2, "CCI", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 2, str.tostring(CCI), text_color=color.black, bgcolor=bgColor_CCI_Value, text_size=textSize_Indicator_table)
+
+table.cell(indicator_table, 0, 3, "CCI BolBand", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 3, icon_CCI, text_color=color.black, bgcolor=bgColor_CCI, text_size=textSize_Indicator_table)
+
+table.cell(indicator_table, 0, 4, "CCI Speed", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 4, str.tostring(CCI_speed), text_color=color.black, bgcolor=bgColor_CCI_Speed, text_size=textSize_Indicator_table)
+
+table.cell(indicator_table, 0, 5, "ATR (D)", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 5, str.tostring(atrValue, "#.##"), text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+
+
+// ========================================================================================
+// HIGHER HIGH AND LOWER LOW INDICATORS
+// with credit to LoneSomeTheBlue's 2021 Higher High Lower Low Strategy (With Source Code)
+// ========================================================================================
+
+lb = input.int(5, title = 'Left Bars', minval = 1)
+rb = input.int(5, title = 'Right Bars', minval = 1)
+showsupres = input.bool(true, title = 'Support/Resistance', inline = 'srcol')
+supcol = input.color(color.rgb(70, 117, 94, 66), title = '', inline = 'srcol')
+rescol = input.color(color.rgb(99, 51, 51, 64), title = '', inline = 'srcol')
+srlinestyle = input.string(line.style_solid, title = 'Line Style/Width', options = [line.style_solid, line.style_dashed, line.style_dotted], inline = 'style')
+srlinewidth = input.int(3, title = '', minval = 1, maxval = 5, inline = 'style')
+changebarcol = input.bool(true, title = 'Change Bar Color', inline = 'bcol')
+
+
+ph = ta.pivothigh(lb, rb)
+pl = ta.pivotlow(lb, rb)
+
+iff_1 = bool(pl) ? -1 : na // Trend direction
+hl = bool(ph) ? 1 : iff_1
+iff_2 = bool(pl) ? pl : na // similar to zigzag but may have multiple highs/lows
+zz = bool(ph) ? ph : iff_2
+valuewhen_1 = ta.valuewhen(bool(hl), hl, 1)
+valuewhen_2 = ta.valuewhen(bool(zz), zz, 1)
+zz := bool(pl) and hl == -1 and valuewhen_1 == -1 and pl > valuewhen_2 ? na : zz
+valuewhen_3 = ta.valuewhen(bool(hl), hl, 1)
+valuewhen_4 = ta.valuewhen(bool(zz), zz, 1)
+zz := bool(ph) and hl == 1 and valuewhen_3 == 1 and ph < valuewhen_4 ? na : zz
+
+valuewhen_5 = ta.valuewhen(bool(hl), hl, 1)
+valuewhen_6 = ta.valuewhen(bool(zz), zz, 1)
+hl := hl == -1 and valuewhen_5 == 1 and zz > valuewhen_6 ? na : hl
+valuewhen_7 = ta.valuewhen(bool(hl), hl, 1)
+valuewhen_8 = ta.valuewhen(bool(zz), zz, 1)
+hl := hl == 1 and valuewhen_7 == -1 and zz < valuewhen_8 ? na : hl
+zz := na(hl) ? na : zz
+
+findprevious() => // finds previous three points (b, c, d, e)
+    ehl = hl == 1 ? -1 : 1
+    loc1 = 0.0
+    loc2 = 0.0
+    loc3 = 0.0
+    loc4 = 0.0
+    xx = 0
+    for x = 1 to 1000 by 1
+        if hl[x] == ehl and not na(zz[x])
+            loc1 := zz[x]
+            xx := x + 1
+            break
+    ehl := hl
+    for x = xx to 1000 by 1
+        if hl[x] == ehl and not na(zz[x])
+            loc2 := zz[x]
+            xx := x + 1
+            break
+    ehl := hl == 1 ? -1 : 1
+    for x = xx to 1000 by 1
+        if hl[x] == ehl and not na(zz[x])
+            loc3 := zz[x]
+            xx := x + 1
+            break
+    ehl := hl
+    for x = xx to 1000 by 1
+        if hl[x] == ehl and not na(zz[x])
+            loc4 := zz[x]
+            break
+    [loc1, loc2, loc3, loc4]
+
+float a = na
+float b = na
+float c = na
+float d = na
+float e = na
+if not na(hl)
+    [loc1, loc2, loc3, loc4] = findprevious()
+    a := zz
+    b := loc1
+    c := loc2
+    d := loc3
+    e := loc4
+    e
+
+_hh = bool(zz) and a > b and a > c and c > b and c > d
+_ll = bool(zz) and a < b and a < c and c < b and c < d
+_hl = bool(zz) and (a >= c and b > c and b > d and d > c and d > e or a < b and a > c and b < d)
+_lh = bool(zz) and (a <= c and b < c and b < d and d < c and d < e or a > b and a < c and b > d)
+
+plotshape(_hl, text = 'HL', title = 'Higher Low', style = shape.labelup, color = color.new(#17d660, 17), textcolor = color.new(color.black, 0), location = location.belowbar, offset = -rb)
+plotshape(_hh, text = 'HH', title = 'Higher High', style = shape.labeldown, color = color.new(#17d660, 17), textcolor = color.new(color.black, 0), location = location.abovebar, offset = -rb)
+plotshape(_ll, text = 'LL', title = 'Lower Low', style = shape.labelup, color = color.new(#f81818, 45), textcolor = color.new(color.white, 0), location = location.belowbar, offset = -rb)
+plotshape(_lh, text = 'LH', title = 'Lower High', style = shape.labeldown, color = color.new(#f81818, 45), textcolor = color.new(color.white, 0), location = location.abovebar, offset = -rb)
+
+float res = na
+float sup = na
+res := _lh ? zz : res[1]
+sup := _hl ? zz : sup[1]
+
+int trend = na
+iff_3 = close < sup ? -1 : nz(trend[1])
+trend := close > res ? 1 : iff_3
+
+res := trend == 1 and _hh or trend == -1 and _lh ? zz : res
+sup := trend == 1 and _hl or trend == -1 and _ll ? zz : sup
+rechange = res != res[1]
+suchange = sup != sup[1]
+
+var line resline = na
+var line supline = na
+if showsupres
+    if rechange
+        line.set_x2(resline, bar_index)
+        line.set_extend(resline, extend = extend.none)
+        resline := line.new(x1 = bar_index - rb, y1 = res, x2 = bar_index, y2 = res, color = rescol, extend = extend.right, style = srlinestyle, width = srlinewidth)
+        resline
+
+    if suchange
+        line.set_x2(supline, bar_index)
+        line.set_extend(supline, extend = extend.none)
+        supline := line.new(x1 = bar_index - rb, y1 = sup, x2 = bar_index, y2 = sup, color = supcol, extend = extend.right, style = srlinestyle, width = srlinewidth)
+        supline
+
+
+
+
+// ATRvsDTR + ADR Zone + SSS50% by theStratuchiha
+
+//inputs
+// TimeFrame = input.timeframe('D', 'Timeframe for ATR Calculation', tooltip = 'Time you want ATR based on', group = 'ADR Zones')
+firstperColor = input.int(25, 'Percentage the color will change at', tooltip = 'first color it will change at based of parameter you set')
+secondperColor = input.int(50, 'Percentage color will change at', tooltip = 'Second color it will change at based of parameter you set')
+thirdperColor = input.int(75, 'Percentage color will change at', tooltip = 'third color it will change at based of parameter you set')
+lastperColor = input.int(100, 'Percentage color will change at', tooltip = 'last color it will change at based of parameter you set')
+normalcolor = input.color(color.gray, 'Normal color', tooltip = 'Standard color before percentage change thresholds')
+colorchangefirst = input.color(color.green, 'Color over First percentage', tooltip = 'color it will change based on Firstper')
+colorchangeSecond = input.color(color.yellow, 'Color over Second percentage', tooltip = 'color it will change based on Secondper')
+colorchangeThird = input.color(color.orange, 'Color over Third percentage', tooltip = 'color it will change based on Thirdper')
+colorchangeLast = input.color(color.red, 'Color over Last percentage', tooltip = 'color it will change based on Lastper')
+
+// BoxPlacement = input.string(position.bottom_right, 'Box Placement', options = [position.bottom_right, position.bottom_left, position.top_right, position.top_center, position.bottom_center])
+
+//Prepare a table
+// var table atrdtr = table.new(BoxPlacement, 3, 1, border_color = color.new(color.black, 25), border_width = 1)
+
+//Indicator math stuff
+// atr_ADR_Zones = request.security(syminfo.tickerid, TimeFrame, ta.atr(14))
+// atr_ADR_Zones_2 = math.round(atr_ADR_Zones, 2)
+// dtr = request.security(syminfo.tickerid, TimeFrame, math.round(high - low, 2))
+// atrp = math.round(dtr / atr_ADR_Zones * 100)
+
+
+//Draw Table
+// if barstate.islast
+//     table.cell(atrdtr, 0, 0, text = 'ATR: ' + str.tostring(atr_ADR_Zones_2))
+//     table.cell(atrdtr, 1, 0, text = 'DTR: ' + str.tostring(dtr))
+//     table.cell(atrdtr, 2, 0, text = str.tostring(atrp) + '%')
+//     if atrp > firstperColor
+//         table.set_bgcolor(atrdtr, colorchangefirst)
+//     if atrp > secondperColor
+//         table.set_bgcolor(atrdtr, colorchangeSecond)
+//     if atrp > thirdperColor
+//         table.set_bgcolor(atrdtr, colorchangeThird)
+//     if atrp > lastperColor
+//         table.set_bgcolor(atrdtr, colorchangeLast)
+
+
+
+//ADR side of script below
+text_ADR1_high = 'ADR1 Upper'
+text_ADR2_high = 'ADR2 Upper'
+
+text_ADR1_low = 'ADR1 Lower'
+text_ADR2_low = 'ADR2 Lower'
+
+text_open = 'Open'
+text_openWK = 'Open WK'
+
+text_fitypercent = '50%'
+text_fitypercent2 = '50% 2'
+
+
+var lime = #00FF00 //ADR2 Low
+var chartreuse = #80FF00 //ADR1 Low
+var orange = #FF8000 //ADR1 High
+var redorange = #FF4000 //ADR2 High
+var gray = #808080 //Open
+var red = #ff000052 ////50%
+var purple = #8d53ac54 ////second 50%
+var blue = #7df8ff52 ////Open WK
+
+
+
+//***Start of Inputs
+var labels_enabled = input.bool(defval = true, title = 'Show labels')
+
+
+var adr_1 = input.int(title = 'ADR 1', defval = 10, minval = 1, group = 'ADR Periods')
+var adr_2 = input.int(title = 'ADR 2', defval = 5, minval = 1, group = 'ADR Periods')
+
+
+var color_ADR1_high = input.color(defval = color.new(orange, 0), title = text_ADR1_high, group = 'Colors')
+var color_ADR2_high = input.color(defval = color.new(redorange, 0), title = text_ADR2_high, group = 'Colors')
+
+var color_ADR1_low = input.color(defval = color.new(chartreuse, 0), title = text_ADR1_low, group = 'Colors')
+var color_ADR2_low = input.color(defval = color.new(lime, 0), title = text_ADR2_low, group = 'Colors')
+
+var color_open = input.color(defval = color.new(gray, 20), title = text_open, group = 'Colors')
+var color_openwk = input.color(defval = color.new(blue, 50), title = text_openWK, group = 'Colors')
+
+adrUppercolorfill = input.color(color.red, 'Adr Upper Zone Color', tooltip = 'Color of zone between Upper Adr 1 and 2')
+adrlowercolorfill = input.color(color.green, 'Adr lower Zone Color', tooltip = 'Color of zone between Lower Adr 1 and 2')
+
+openofWK = input.bool(defval = true, title = 'Weekly Open')
+
+///////50% inputs
+
+var fitypercentlineColor = input.color(defval = color.new(red, 50), title = text_fitypercent, group = 'SSS50%Rule')
+fiftypercentTF = input.timeframe('D', 'SSS50TimeFrame', tooltip = 'TimeFrame you want the 50% line to be drawn based on', group = 'SSS50%Rule')
+fitypercentOnorOFF = input.bool(defval = true, title = '50%Line On/Off')
+
+var fitypercentlineColor2 = input.color(defval = color.new(purple, 50), title = text_fitypercent, group = 'SSS50%Rule')
+fiftypercentTF2 = input.timeframe('W', 'SSS50TimeFrame', tooltip = 'TimeFrame you want the 2nd 50% line to be drawn based on', group = 'SSS50%Rule')
+fitypercentOnorOFF2 = input.bool(defval = true, title = '50%Line On/Off')
+
+
+
+
+//***End of Inputs
+
+//***Start of local functions definiton***
+
+draw_line(_x1, _y1, _x2, _y2, _xloc, _extend, _color, _style, _width) =>
+    dline = line.new(x1 = _x1, y1 = _y1, x2 = _x2, y2 = _y2, xloc = _xloc, extend = _extend, color = _color, style = _style, width = _width)
+    line.delete(dline[1])
+
+
+draw_label(_x, _y, _text, _xloc, _yloc, _color, _style, _textcolor, _size, _textalign, _tooltip) =>
+    dlabel = label.new(x = _x, y = _y, text = _text, xloc = _xloc, yloc = _yloc, color = _color, style = _style, textcolor = _textcolor, size = _size, textalign = _textalign, tooltip = _tooltip)
+    label.delete(dlabel[1])
+
+//If security is futures - replace the ticker with continuous contract
+tickerid_func() =>
+    tickerid = syminfo.tickerid
+    if syminfo.type == 'futures'
+        tickerid := syminfo.root + '1!'
+        tickerid
+
+//Function to calculate ADR levels
+//Parameters:
+//  * lengthInput - ADR period
+//  * hi_low - true-->High, else-->Low 
+adr_func(lengthInput, hi_low) =>
+    float result = 0
+    float adr = 0
+    open_ = request.security(tickerid_func(), 'D', open, barmerge.gaps_off, barmerge.lookahead_on)
+    adr_High = request.security(tickerid_func(), 'D', ta.sma(high[1], lengthInput), barmerge.gaps_off, barmerge.lookahead_on)
+    adr_Low = request.security(tickerid_func(), 'D', ta.sma(low[1], lengthInput), barmerge.gaps_off, barmerge.lookahead_on)
+    adr := adr_High - adr_Low
+
+    if hi_low //High
+        result := adr / 2 + open_
+        result
+    else //Low
+        result := open_ - adr / 2
+        result
+
+////////50 percent calculation
+
+highofTFinput = request.security(syminfo.tickerid, fiftypercentTF, high[1], lookahead = barmerge.lookahead_on)
+
+lowofTFinput = request.security(syminfo.tickerid, fiftypercentTF, low[1], lookahead = barmerge.lookahead_on)
+
+fiftypercentLevel = (lowofTFinput - highofTFinput) * 0.5 + highofTFinput
+
+highofTFinput2 = request.security(syminfo.tickerid, fiftypercentTF2, high[1], lookahead = barmerge.lookahead_on)
+
+lowofTFinput2 = request.security(syminfo.tickerid, fiftypercentTF2, low[1], lookahead = barmerge.lookahead_on)
+
+fiftypercentLevel2 = (lowofTFinput2 - highofTFinput2) * 0.5 + highofTFinput2
+
+//Workaround to disable color management on the standard tab Style for plots
+//Custom inputs for colors should be used instead
+transp_func() =>
+    transp_0 = 0
+    transp_0
+
+//***End of local functions definiton***
+
+//***Start of getting data  
+start_time = request.security(tickerid_func(), 'D', time_close[1], barmerge.gaps_off, barmerge.lookahead_on)
+open__ = request.security(tickerid_func(), 'D', open, barmerge.gaps_off, barmerge.lookahead_on)
+openWK__ = request.security(tickerid_func(), 'W', open, barmerge.gaps_off, barmerge.lookahead_on)
+
+//start_time1 = request.security(tickerid_func(), "W", time_close[1],barmerge.gaps_off,barmerge.lookahead_on)
+start_day_open = request.security(syminfo.tickerid, 'D', open, lookahead = barmerge.lookahead_on)
+start_time1 = request.security(syminfo.tickerid, 'W', open, lookahead = barmerge.lookahead_on)
+
+//wk_time = request.security(syminfo.tickerid, "W", time[1], lookahead = barmerge.lookahead_on)
+perc50_1_time = request.security(syminfo.tickerid, fiftypercentTF, time[1], lookahead = barmerge.lookahead_on)
+perc50_2_time = request.security(syminfo.tickerid, fiftypercentTF2, time[1], lookahead = barmerge.lookahead_on)
+
+
+adr1_high = adr_func(adr_1, true)
+adr1_low = adr_func(adr_1, false)
+adr2_high = adr_func(adr_2, true)
+adr2_low = adr_func(adr_2, false)
+
+
+//***End of getting data
+
+float _adr1_high = na
+float _adr1_low = na
+float _adr2_high = na
+float _adr2_low = na
+
+float _open = na
+
+
+
+//*********************
+//***Start of plotting*
+
+//Decide if we can show the chart:
+//Daily levels should be visible on intraday chart only
+
+//Decide if we can show the chart:
+//Daily levels should be visible on intraday chart only
+
+var show_chart = false
+
+if timeframe.isintraday
+    show_chart := true
+    show_chart
+
+
+
+
+////Plot today only
+
+f_returnTFminutes(_tfs) =>
+    int tfMin = switch _tfs
+        '240' => 240
+        '130' => 130
+        '90' => 90
+        '60' => 60
+        '65' => 65
+        '10' => 10
+        '9' => 9
+        '18' => 18
+        '36' => 36
+        '6' => 6
+        '5' => 5
+        '4' => 4
+        '3' => 3
+        '2' => 2
+        '1' => 1
+        '45' => 45
+        '30' => 30
+        '26' => 26
+        '15' => 15
+        '13' => 13
+        '1D' => 1440
+        'D' => 1440
+        '1W' => 10080
+        'W' => 10080
+        '1M' => 43830
+        'M' => 43830
+        '3M' => 43830
+        '12M' => 43830
+        => 1
+    currentTFmins = timeframe.period == '65' ? 65 : timeframe.period == '60' ? 60 : timeframe.period == '90' ? 90 : timeframe.period == '240' ? 240 : timeframe.period == '130' ? 130 : timeframe.period == '26' ? 26 : timeframe.period == '65' ? 65 : timeframe.period == '18' ? 18 : timeframe.period == '5' ? 5 : timeframe.period == '36' ? 36 : timeframe.period == '9' ? 9 : timeframe.period == '4' ? 4 : timeframe.period == '3' ? 3 : timeframe.period == '2' ? 2 : timeframe.period == '1' ? 1 : timeframe.period == '45' ? 45 : timeframe.period == '30' ? 30 : timeframe.period == '16' ? 16 : timeframe.period == '13' ? 13 : timeframe.period == '15' ? 15 : timeframe.isdaily ? 1440 : timeframe.isweekly ? 10080 : timeframe.ismonthly ? 43830 : na
+    isTFBelowOrEqual = tfMin >= currentTFmins
+    isTFBelowOrEqual
+
+
+currTF = timeframe.period
+float posX = time + 24 * 60 * 60 * 1000
+
+if currTF == '60' or currTF == '90'
+    posX := time + 24 * 60 * 60 * 2000
+    posX
+if currTF == '240'
+    posX := time + 24 * 60 * 60 * 10000
+    posX
+if currTF == '720' or currTF == 'D'
+    posX := time + 24 * 60 * 60 * 20000
+    posX
+if currTF == 'W'
+    posX := time + 24 * 60 * 60 * 100000
+    posX
+if currTF == 'M'
+    posX := time + 24 * 60 * 60 * 400000
+    posX
+
+
+
+var perc50_1 = line.new(na, na, na, na)
+if fitypercentOnorOFF and f_returnTFminutes(fiftypercentTF)
+    perc50_1 := line.new(perc50_1_time, fiftypercentLevel, time, fiftypercentLevel, xloc = xloc.bar_time, extend = extend.right, color = fitypercentlineColor, width = 1)
+    line.delete(perc50_1[1])
+if labels_enabled == true and f_returnTFminutes(fiftypercentTF)
+    perc50_1_lbl = label.new(math.round(posX), fiftypercentLevel, fiftypercentTF + ':50% (' + str.tostring(math.round(fiftypercentLevel, 2)) + ')', color = fitypercentlineColor, textcolor = fitypercentlineColor, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+    label.delete(perc50_1_lbl[1])
+    //draw_line(start_time1, fiftypercentLevel, time, fiftypercentLevel, xloc.bar_time, extend.right, fitypercentlineColor, line.style_solid, 2)  
+
+var perc50_2 = line.new(na, na, na, na)
+if fitypercentOnorOFF2 and f_returnTFminutes(fiftypercentTF2)
+    perc50_2 := line.new(perc50_2_time, fiftypercentLevel2, time, fiftypercentLevel2, xloc = xloc.bar_time, extend = extend.right, color = fitypercentlineColor2, width = 1)
+    line.delete(perc50_2[1])
+if labels_enabled == true and f_returnTFminutes(fiftypercentTF2)
+    perc50_2_lbl = label.new(math.round(posX), fiftypercentLevel2, fiftypercentTF2 + ':50% (' + str.tostring(math.round(fiftypercentLevel2, 2)) + ')', color = fitypercentlineColor2, textcolor = fitypercentlineColor2, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+    label.delete(perc50_2_lbl[1])
+
+//     draw_line(start_time1, fiftypercentLevel2, time, fiftypercentLevel2, xloc.bar_time, extend.right, fitypercentlineColor2, line.style_solid, 2)  
+
+
+//////////////Weekly Open Line Code///////////////////////////////////////////
+var wo_l = line.new(na, na, na, na)
+if openofWK and f_returnTFminutes('W')
+    // wo_l := line.new(bar_index, wk_time, bar_index, time, xloc = xloc.bar_time, extend=extend.right, color=color_openwk, width=1)
+    // line.delete(wo_l[1])
+    var line1 = line.new(na, na, na, na, style = line.style_solid, color = color_openwk, extend = extend.right)
+    if bool(ta.change(weekofyear))
+        line.set_xy1(line1, bar_index, open)
+        line.set_xy2(line1, bar_index + 1, open)
+if labels_enabled == true and f_returnTFminutes('W')
+    wo_lbl = label.new(math.round(posX), start_time1, 'Open WK (' + str.tostring(math.round(start_time1, 2)) + ')', color = color_openwk, textcolor = color_openwk, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+    label.delete(wo_lbl[1])
+    //     draw_line(start_time1, openWK__, time, openWK__, xloc.bar_time, extend.right, color_openwk, line.style_solid, 1) 
+    ///////////////////////////////////////////////////
+
+///////////Daily Open
+
+
+    day_line = line.new(x1 = bar_index - 1, y1 = start_day_open, x2 = bar_index, y2 = start_day_open, xloc = xloc.bar_index, style = line.style_solid, extend = extend.right, color = color_open)
+    line.delete(day_line[1]) // remove the previous line when new bar appears
+    // if ta.change(dayofweek)
+    //     line.set_xy1(day_line, bar_index, open)
+    //     line.set_xy2(day_line, bar_index + 1, open)
+    //draw_line(start_time, open__, time, open__, xloc.bar_time, extend.none, color_open, line.style_solid, 2)  
+    if labels_enabled == true and f_returnTFminutes('D')
+        d_lbl = label.new(math.round(posX), bar_index, 'Open (' + str.tostring(math.round(open__, 2)) + ')', color = color_openwk, textcolor = color_openwk, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+        label.delete(d_lbl[1])
+
+
+
+//////////////////////////////
+
+
+if show_chart
+    draw_line1 = line.new(start_time, adr1_high, time, adr1_high, xloc.bar_time, extend.none, color_ADR1_high, line.style_solid, 1)
+    line.delete(draw_line1[1])
+
+    draw_line2 = line.new(start_time, adr2_high, time, adr2_high, xloc.bar_time, extend.none, color_ADR2_high, line.style_solid, 1)
+    line.delete(draw_line2[1])
+
+    draw_line3 = line.new(start_time, adr1_low, time, adr1_low, xloc.bar_time, extend.none, color_ADR1_low, line.style_solid, 1)
+    line.delete(draw_line3[1])
+
+    draw_line4 = line.new(start_time, adr2_low, time, adr2_low, xloc.bar_time, extend.none, color_ADR2_low, line.style_solid, 1)
+    line.delete(draw_line4[1])
+
+    linefill.new(draw_line1, draw_line2, color.new(adrUppercolorfill, 80))
+
+    linefill.new(draw_line3, draw_line4, color.new(adrlowercolorfill, 80))
+
+//***End of plotting***
+//*********************
+
+//*********************
+
+//*********ALERTS**************
+
+[currPrice, currHigh, currLow] = request.security(syminfo.tickerid, timeframe.period, [close, high, low], lookahead = barmerge.lookahead_on)
+
+
+fiftypercentlevelCrossup = ta.crossover(currPrice, fiftypercentLevel)
+
+fiftypercentlevelCrossup2 = ta.crossover(currPrice, fiftypercentLevel2)
+
+if fiftypercentlevelCrossup
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over 50% of prev candle detected!', alert.freq_once_per_bar)
+
+if fiftypercentlevelCrossup2
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over 50% of prev candle detected!', alert.freq_once_per_bar)
+
+fiftypercentlevelCrossDown = ta.crossunder(currPrice, fiftypercentLevel)
+
+fiftypercentlevelCrossDown2 = ta.crossunder(currPrice, fiftypercentLevel2)
+
+if fiftypercentlevelCrossDown
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under 50% of prev candle detected!', alert.freq_once_per_bar)
+
+
+if fiftypercentlevelCrossDown2
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under 50% of prev candle detected!', alert.freq_once_per_bar)
+
+adrhigh1cross = ta.crossover(currPrice, adr1_high)
+
+adrhigh2cross = ta.crossover(currPrice, adr2_high)
+
+if adrhigh1cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over upper adr 1 detected!', alert.freq_once_per_bar)
+if adrhigh2cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over upper adr 2 detected!', alert.freq_once_per_bar)
+
+adrlow1cross = ta.crossunder(currPrice, adr1_low)
+
+adrlow2cross = ta.crossunder(currPrice, adr2_low)
+
+if adrlow1cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under lower adr 1 detected!', alert.freq_once_per_bar)
+if adrlow2cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under lower adr 2 detected!', alert.freq_once_per_bar)
+
+//***Start of Labels***
+
+label_ADR1_high = ''
+label_ADR2_high = ''
+
+label_ADR1_low = ''
+label_ADR2_low = ''
+
+label_open = ''
+label_openWK = ''
+
+label_fitypercentline = ''
+label_fitypercentline2 = ''
+
+if labels_enabled == true
+    label_ADR1_high := str.tostring(math.round_to_mintick(adr1_high))
+    label_ADR2_high := str.tostring(math.round_to_mintick(adr2_high))
+
+    label_ADR1_low := str.tostring(math.round_to_mintick(adr1_low))
+    label_ADR2_low := str.tostring(math.round_to_mintick(adr2_low))
+
+    label_open := str.tostring(math.round_to_mintick(open__))
+    label_open
+    //label_fitypercentline :=  str.tostring(math.round_to_mintick(fiftypercentLevel))
+    //label_fitypercentline2 :=  str.tostring(math.round_to_mintick(fiftypercentLevel2))
+    //label_openWK      := str.tostring(math.round_to_mintick(openWK__))
+
+string_ADR1_high = ' (' + label_ADR1_high + ')'
+string_ADR2_high = ' (' + label_ADR2_high + ')'
+
+string_ADR1_low = ' (' + label_ADR1_low + ')'
+string_ADR2_low = ' (' + label_ADR2_low + ')'
+
+string_open_low = ' (' + label_open + ')'
+string_open_wk = ' (' + label_openWK + ')'
+
+string_fiftypercent = ' (' + label_fitypercentline + ')'
+string_fiftypercent2 = ' (' + label_fitypercentline2 + ')'
+
+//Labels
+if show_chart and labels_enabled == true
+    draw_label(bar_index + 1, adr1_high, text_ADR1_high + string_ADR1_high, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR1_high, transp_func()), size.normal, text.align_left, '')
+    draw_label(bar_index + 1, adr2_high, text_ADR2_high + string_ADR2_high, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR2_high, transp_func()), size.normal, text.align_left, '')
+
+    draw_label(bar_index + 1, adr1_low, text_ADR1_low + string_ADR1_low, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR1_low, transp_func()), size.normal, text.align_left, '')
+    draw_label(bar_index + 1, adr2_low, text_ADR2_low + string_ADR2_low, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR2_low, transp_func()), size.normal, text.align_left, '')
+
+draw_label(bar_index + 1, open__, text_open + string_open_low, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_open, transp_func()), size.normal, text.align_left, '')
