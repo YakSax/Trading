@@ -1,10 +1,8 @@
-
-
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © Yak_Sax
 
 //@version=5
-indicator('Breaker, Market Structure, CCI, ADR Zones', shorttitle = 'BKR, Market Structure, ADR', max_lines_count = 500, max_boxes_count = 200, max_labels_count = 400, max_bars_back = 5000, overlay = true)
+indicator('Breaker, Market Structure, ADR Zones', shorttitle = 'Breaker,Market Structure,ADR Zones', max_lines_count = 500, max_boxes_count = 200, max_labels_count = 400, max_bars_back = 5000, overlay = true)
 
 
 // ========================================================================================
@@ -17,7 +15,7 @@ indicator('Breaker, Market Structure, CCI, ADR Zones', shorttitle = 'BKR, Market
 // KivancOzbiligic's 2021 Supertrend
 // DreadBlitz's 2019 Bollinger Bands on MACD
 // LoneSomeTheBlue's 2021 Higher High Lower Low Strategy (With Source Code)
-// theStratuchiha ATRvsDTR + ADR Zone + SSS50% 
+// the author(s) of TradingView's in-house VWAP indicator
 
 // Also highly recommend
 // UAlgo's Price Action Volumetric Order Blocks [Ualgo]
@@ -72,6 +70,100 @@ plot(showEMA ? ta.ema(close, EMA2) : na, title = 'EMA 2', color = color.new(EMA2
 plot(showEMA ? ta.ema(close, EMA3) : na, title = 'EMA 3', color = color.new(EMA3Color, 40), linewidth = 2)
 plot(showEMA ? ta.ema(close, EMA4) : na, title = 'EMA 4', color = color.new(EMA4Color, 30), linewidth = 2)
 plot(showEMA ? ta.ema(close, EMA5) : na, title = 'EMA 5', color = color.new(EMA5Color, 20), linewidth = 2)
+
+
+
+// ============
+// PLOT VWAP
+// ============
+
+hideVwap = input.bool(false, title="Hide VWAP (all timeframes)", group="VWAP Settings", display = display.data_window)
+hideonDWM = input(false, title="Hide VWAP on 1D or Above", group="VWAP Settings", display = display.data_window)
+var anchor = input.string(defval = "Session", title="Anchor Period",
+ options=["Session", "Week", "Month", "Quarter", "Year", "Decade", "Century", "Earnings", "Dividends", "Splits"], group="VWAP Settings")
+vwap_src = input(title = "Source", defval = hlc3, group="VWAP Settings", display = display.data_window)
+offset = input.int(0, title="Offset", group="VWAP Settings", minval=0, display = display.data_window)
+
+BANDS_GROUP = "VWAP Bands Settings"
+CALC_MODE_TOOLTIP = "Determines the units used to calculate the distance of the bands. When 'Percentage' is selected, a multiplier of 1 means 1%."
+calcModeInput = input.string("Standard Deviation", "Bands Calculation Mode", options = ["Standard Deviation", "Percentage"], group = BANDS_GROUP, tooltip = CALC_MODE_TOOLTIP, display = display.data_window)
+showBand_1 = input(true, title = "", group = BANDS_GROUP, inline = "band_1", display = display.data_window)
+bandMult_1 = input.float(1.0, title = "Bands Multiplier #1", group = BANDS_GROUP, inline = "band_1", step = 0.5, minval=0, display = display.data_window)
+showBand_2 = input(false, title = "", group = BANDS_GROUP, inline = "band_2", display = display.data_window)
+bandMult_2 = input.float(2.0, title = "Bands Multiplier #2", group = BANDS_GROUP, inline = "band_2", step = 0.5, minval=0, display = display.data_window)
+showBand_3 = input(false, title = "", group = BANDS_GROUP, inline = "band_3", display = display.data_window)
+bandMult_3 = input.float(3.0, title = "Bands Multiplier #3", group = BANDS_GROUP, inline = "band_3", step = 0.5, minval=0, display = display.data_window)
+
+cumVolume = ta.cum(volume)
+if barstate.islast and cumVolume == 0
+    runtime.error("No volume is provided by the data vendor.")
+
+new_earnings = request.earnings(syminfo.tickerid, earnings.actual, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+new_dividends = request.dividends(syminfo.tickerid, dividends.gross, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+new_split = request.splits(syminfo.tickerid, splits.denominator, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+
+isNewPeriod = switch anchor
+	"Earnings"  => not na(new_earnings)
+	"Dividends" => not na(new_dividends)
+	"Splits"    => not na(new_split)
+	"Session"   => timeframe.change("D")
+	"Week"      => timeframe.change("W")
+	"Month"     => timeframe.change("M")
+	"Quarter"   => timeframe.change("3M")
+	"Year"      => timeframe.change("12M")
+	=> false
+
+isEsdAnchor = anchor == "Earnings" or anchor == "Dividends" or anchor == "Splits"
+if na(vwap_src[1]) and not isEsdAnchor
+	isNewPeriod := true
+
+float vwapValue = na
+float upperBandValue1 = na
+float lowerBandValue1 = na
+float upperBandValue2 = na
+float lowerBandValue2 = na
+float upperBandValue3 = na
+float lowerBandValue3 = na
+
+if not (hideVwap or (hideonDWM and timeframe.isdwm))
+    [_vwap, _stdevUpper, _] = ta.vwap(vwap_src, isNewPeriod, 1)
+	vwapValue := _vwap
+    stdevAbs = _stdevUpper - _vwap
+	bandBasis = calcModeInput == "Standard Deviation" ? stdevAbs : _vwap * 0.01
+	upperBandValue1 := _vwap + bandBasis * bandMult_1
+	lowerBandValue1 := _vwap - bandBasis * bandMult_1
+	upperBandValue2 := _vwap + bandBasis * bandMult_2
+	lowerBandValue2 := _vwap - bandBasis * bandMult_2
+	upperBandValue3 := _vwap + bandBasis * bandMult_3
+	lowerBandValue3 := _vwap - bandBasis * bandMult_3
+
+plot(vwapValue, title = "VWAP", color = color.rgb(41, 98, 255, 30), linewidth=2,  offset = offset)
+
+upperBand_1 = plot(upperBandValue1, title="Upper Band #1", color = color.rgb(165, 175, 165, 60), linewidth=2, offset = offset, display = showBand_1 ? display.all : display.none)  // removed ", editable = showBand_1" at end due to Version 5
+lowerBand_1 = plot(lowerBandValue1, title="Lower Band #1", color = color.rgb(165, 175, 165, 60), linewidth=2, offset = offset, display = showBand_1 ? display.all : display.none) // removed ", editable = showBand_1" at end due to Version 5
+fill(upperBand_1, lowerBand_1,      title="Bands Fill #1", color = color.new(color.green, 100),  display = showBand_1 ? display.all : display.none) // removed ", editable = showBand_1" at end due to Version 5
+
+upperBand_2 = plot(upperBandValue2, title="Upper Band #2", color = color.rgb(121, 121, 97, 60), offset = offset, display = showBand_2 ? display.all : display.none) // removed ", editable = showBand_2" at end due to Version 5
+lowerBand_2 = plot(lowerBandValue2, title="Lower Band #2", color = color.rgb(121, 121, 97, 60), offset = offset, display = showBand_2 ? display.all : display.none) // removed ", editable = showBand_2" at end due to Version 5
+fill(upperBand_2, lowerBand_2,      title="Bands Fill #2", color = color.new(color.olive, 100),   display = showBand_2 ? display.all : display.none) // removed ", editable = showBand_2" at end due to Version 5
+
+upperBand_3 = plot(upperBandValue3, title="Upper Band #3", color = color.rgb(91, 131, 127, 60), offset = offset, display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
+lowerBand_3 = plot(lowerBandValue3, title="Lower Band #3", color = color.rgb(91, 131, 127, 60), offset = offset, display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
+fill(upperBand_3, lowerBand_3,      title="Bands Fill #3", color = color.new(color.teal, 100),   display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
+
+// Define Bullish/Bearish Condition for VWAP
+isBullish_Vwap = close > vwapValue
+isBearish_Vwap = close < vwapValue
+
+// Function to get Icon & Background Color
+getIconAndColor(isBullish_Vwap, isBearish_Vwap) =>
+    icon_Vwap = isBullish_Vwap ? "▲" : isBearish_Vwap ? "▼" : "--"
+    bgColor_Vwap = isBullish_Vwap ? color.green : isBearish_Vwap ? color.red : color.gray
+    [icon_Vwap, bgColor_Vwap]
+
+// Get Icon & Color for VWAP Status
+[icon_Vwap, bgColor_Vwap] = getIconAndColor(isBullish_Vwap, isBearish_Vwap)
+
 
 
 // =====================================================================
@@ -1764,7 +1856,7 @@ if ta.crossover(close, Major_HighLevel) and LockBreak_M != Major_HighIndex // Bu
         ExternalTrend := 'Up Trend'
         if MajorBuBoSLine_Show == 'On'
             MajorLine_BoSBull := line.new(Major_HighIndex, Major_HighLevel, bar_index, Major_HighLevel, style = MajorBuBoSLine_Style, color = MajorBuBoSLine_Color)
-            MajorLabel_BoSBull := label.new((Major_HighIndex + bar_index) / 2, Major_HighLevel, text = 'Major BoS', color = color.rgb(0, 0, 0, 100), textcolor = MajorBuBoSLine_Color, size = size.normal)
+            MajorLabel_BoSBull := label.new((Major_HighIndex + bar_index) / 2, Major_HighLevel, text = 'Major BoS', color = color.rgb(0, 0, 0, 90), textcolor = MajorBuBoSLine_Color, size = size.normal)
             MajorLabel_BoSBull
     else if ExternalTrend == 'Down Trend' // Bullish ChoCh Detector
         Bullish_Major_ChoCh := true
@@ -1774,7 +1866,7 @@ if ta.crossover(close, Major_HighLevel) and LockBreak_M != Major_HighIndex // Bu
         ExternalTrend := 'Up Trend'
         if MajorBuChoChLine_Show == 'On'
             MajorLine_ChoChBull := line.new(Major_HighIndex, Major_HighLevel, bar_index, Major_HighLevel, style = MajorBuChoChLine_Style, color = MajorBuChoChLine_Color)
-            MajorLabel_ChoChBull := label.new((Major_HighIndex + bar_index) / 2, Major_HighLevel, text = 'Major ChoCh', color = color.rgb(0, 0, 0, 100), textcolor = MajorBuChoChLine_Color, size = size.normal)
+            MajorLabel_ChoChBull := label.new((Major_HighIndex + bar_index) / 2, Major_HighLevel, text = 'Major ChoCh', color = color.rgb(0, 0, 0, 90), textcolor = MajorBuChoChLine_Color, size = size.normal)
             MajorLabel_ChoChBull
 else
     Bullish_Major_ChoCh := false
@@ -2027,10 +2119,10 @@ checkEMAOrder() =>
 [isbullish_EMA, isbearish_EMA] = checkEMAOrder()
 
 // Assign icons and colors
-getIconAndColor(bullish, bearish) =>
-    icon = bullish ? "▲" : bearish ? "▼" : "No"
-    bgColor = bullish ? color.green : bearish ? color.red : color.gray
-    [icon, bgColor]
+// getIconAndColor(bullish, bearish) =>
+//     icon = bullish ? "▲" : bearish ? "▼" : "No"
+//     bgColor = bullish ? color.green : bearish ? color.red : color.gray
+//     [icon, bgColor]
 
 [icon, bg] = getIconAndColor(isbullish_EMA, isbearish_EMA)
 
@@ -2069,20 +2161,20 @@ dnPlot = plot(show_SuperTrend and Suprtrend == 1 ? na : dn, title='Down Trend', 
 
 // Buy signal shapes
 buySignal = Suprtrend == 1 and Suprtrend[1] == -1
-plotshape(show_SuperTrend and buySignal ? up : na, title='UpTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.green)
-plotshape(show_SuperTrend and buySignal and showsignals ? up : na, title='Buy', text='ST Buy', location=location.absolute, style=shape.labelup, size=size.tiny, color=color.green, textcolor=color.white)
+plotshape(show_SuperTrend and buySignal ? up : na, title='UpTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.rgb(76, 175, 79, 60))
+plotshape(show_SuperTrend and buySignal and showsignals ? up : na, title='Buy', text='ST Buy', location=location.absolute, style=shape.labelup, size=size.tiny, color=color.rgb(76, 175, 79, 60), textcolor=color.white)
 
 // Sell signal shapes
 sellSignal = Suprtrend == -1 and Suprtrend[1] == 1
-plotshape(show_SuperTrend and sellSignal ? dn : na, title='DownTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.red)
-plotshape(show_SuperTrend and sellSignal and showsignals ? dn : na, title='Sell', text='ST Sell', location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.red, textcolor=color.white)
+plotshape(show_SuperTrend and sellSignal ? dn : na, title='DownTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.rgb(255, 82, 82, 60))
+plotshape(show_SuperTrend and sellSignal and showsignals ? dn : na, title='Sell', text='ST Sell', location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.rgb(255, 82, 82, 60), textcolor=color.white)
 
 // A dummy plot to serve as a reference for fill()
 mPlot = plot(ohlc4, title='', style=plot.style_circles, linewidth=math.max(1, 0))
 
-// Define fill colors based on the trend
-longFillColor  = Suprtrend == 1 ? color.rgb(76, 175, 79, 89)   : color.rgb(255, 255, 255, 97)
-shortFillColor = Suprtrend == -1 ? color.rgb(255, 82, 82, 89)   : color.rgb(255, 255, 255, 97)
+// Define SuperTrend fill colors based on the trend
+longFillColor  = Suprtrend == 1 ? color.rgb(76, 175, 79, 90)   : color.rgb(255, 255, 255, 97)
+shortFillColor = Suprtrend == -1 ? color.rgb(255, 82, 82, 90)   : color.rgb(255, 255, 255, 97)
 
 // Apply fills only when show_SuperTrend is true by conditionally setting the color
 fill(mPlot, upPlot, title='UpTrend Highlighter', color= show_SuperTrend ? longFillColor  : na)
@@ -2174,25 +2266,31 @@ getTextSize(tableSizeInput) =>
     tableSizeInput == "Small" ? size.small : tableSizeInput == "Large" ? size.large : size.normal
 
 
-var table indicator_table = table.new(position=getTablePosition(tablePositionInput), columns=2, rows=6, bgcolor=color.gray)
+var table indicator_table = table.new(position=getTablePosition(tablePositionInput), columns=2, rows=7, bgcolor=color.gray)
 textSize_Indicator_table = getTextSize(tableSizeInput)
-table.cell(indicator_table, 0, 0, "EMAs Aligned", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
-table.cell(indicator_table, 1, 0, icon, text_color=color.black, bgcolor=bg, text_size=textSize_Indicator_table)
 
-table.cell(indicator_table, 0, 1, "Supertrend", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
-table.cell(indicator_table, 1, 1, icon_ST, text_color=color.black, bgcolor=bgColor_ST, text_size=textSize_Indicator_table)
+table.cell(indicator_table, 0, 0, "Abv/Blo VWAP", text_color=color.black, bgcolor=color.rgb(200, 200, 200))
+table.cell(indicator_table, 1, 0, icon_Vwap, text_color=color.black, bgcolor=bgColor_Vwap, text_size=textSize_Indicator_table)
 
-table.cell(indicator_table, 0, 2, "CCI", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
-table.cell(indicator_table, 1, 2, str.tostring(CCI), text_color=color.black, bgcolor=bgColor_CCI_Value, text_size=textSize_Indicator_table)
+table.cell(indicator_table, 0, 1, "EMAs Aligned", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 1, icon, text_color=color.black, bgcolor=bg, text_size=textSize_Indicator_table)
 
-table.cell(indicator_table, 0, 3, "CCI BolBand", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
-table.cell(indicator_table, 1, 3, icon_CCI, text_color=color.black, bgcolor=bgColor_CCI, text_size=textSize_Indicator_table)
+table.cell(indicator_table, 0, 2, "Supertrend", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 2, icon_ST, text_color=color.black, bgcolor=bgColor_ST, text_size=textSize_Indicator_table)
 
-table.cell(indicator_table, 0, 4, "CCI Speed", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
-table.cell(indicator_table, 1, 4, str.tostring(CCI_speed), text_color=color.black, bgcolor=bgColor_CCI_Speed, text_size=textSize_Indicator_table)
+table.cell(indicator_table, 0, 3, "CCI", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 3, str.tostring(CCI), text_color=color.black, bgcolor=bgColor_CCI_Value, text_size=textSize_Indicator_table)
 
-table.cell(indicator_table, 0, 5, "ATR (D)", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
-table.cell(indicator_table, 1, 5, str.tostring(atrValue, "#.##"), text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 0, 4, "CCI BolBand", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 4, icon_CCI, text_color=color.black, bgcolor=bgColor_CCI, text_size=textSize_Indicator_table)
+
+table.cell(indicator_table, 0, 5, "CCI Speed", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 5, str.tostring(CCI_speed), text_color=color.black, bgcolor=bgColor_CCI_Speed, text_size=textSize_Indicator_table)
+
+table.cell(indicator_table, 0, 6, "ATR (D)", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+table.cell(indicator_table, 1, 6, str.tostring(atrValue, "#.##"), text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
+
+
 
 
 // ========================================================================================
@@ -2282,10 +2380,10 @@ _ll = bool(zz) and a < b and a < c and c < b and c < d
 _hl = bool(zz) and (a >= c and b > c and b > d and d > c and d > e or a < b and a > c and b < d)
 _lh = bool(zz) and (a <= c and b < c and b < d and d < c and d < e or a > b and a < c and b > d)
 
-plotshape(_hl, text = 'HL', title = 'Higher Low', style = shape.labelup, color = color.new(#17d660, 17), textcolor = color.new(color.black, 0), location = location.belowbar, offset = -rb)
-plotshape(_hh, text = 'HH', title = 'Higher High', style = shape.labeldown, color = color.new(#17d660, 17), textcolor = color.new(color.black, 0), location = location.abovebar, offset = -rb)
-plotshape(_ll, text = 'LL', title = 'Lower Low', style = shape.labelup, color = color.new(#f81818, 45), textcolor = color.new(color.white, 0), location = location.belowbar, offset = -rb)
-plotshape(_lh, text = 'LH', title = 'Lower High', style = shape.labeldown, color = color.new(#f81818, 45), textcolor = color.new(color.white, 0), location = location.abovebar, offset = -rb)
+plotshape(_hl, text = 'HL', title = 'Higher Low', style = shape.labelup, color = color.new(#17d660, 70), textcolor =  color.new(color.white, 50), location = location.belowbar, offset = -rb)
+plotshape(_hh, text = 'HH', title = 'Higher High', style = shape.labeldown, color = color.new(#17d660, 70), textcolor = color.new(color.white, 50), location = location.abovebar, offset = -rb)
+plotshape(_ll, text = 'LL', title = 'Lower Low', style = shape.labelup, color = color.new(#f81818, 70), textcolor = color.new(color.white, 50), location = location.belowbar, offset = -rb)
+plotshape(_lh, text = 'LH', title = 'Lower High', style = shape.labeldown, color = color.new(#f81818, 70), textcolor = color.new(color.white, 50), location = location.abovebar, offset = -rb)
 
 float res = na
 float sup = na
@@ -2317,9 +2415,11 @@ if showsupres
         supline
 
 
+// ========================================================================================
+// ATR ZONES
+// with credit to ATRvsDTR + ADR Zone + SSS50% by theStratuchiha
+// ========================================================================================
 
-
-// ATRvsDTR + ADR Zone + SSS50% by theStratuchiha
 
 //inputs
 // TimeFrame = input.timeframe('D', 'Timeframe for ATR Calculation', tooltip = 'Time you want ATR based on', group = 'ADR Zones')
@@ -2406,7 +2506,7 @@ var color_openwk = input.color(defval = color.new(blue, 50), title = text_openWK
 adrUppercolorfill = input.color(color.red, 'Adr Upper Zone Color', tooltip = 'Color of zone between Upper Adr 1 and 2')
 adrlowercolorfill = input.color(color.green, 'Adr lower Zone Color', tooltip = 'Color of zone between Lower Adr 1 and 2')
 
-openofWK = input.bool(defval = true, title = 'Weekly Open')
+openofWK = input.bool(defval = false, title = 'Weekly Open')
 
 ///////50% inputs
 
