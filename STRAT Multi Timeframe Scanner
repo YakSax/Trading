@@ -1,0 +1,179 @@
+//@version=6
+indicator("STRAT Multi Timeframe Scanner", overlay=true, max_labels_count=500)
+
+// ────────────── User Inputs ──────────────
+maxRows      = input.int(title="Max Table Rows", defval=20, minval=1)
+useColorBg   = input.bool(title="Use Color Background for Column 1", defval=true)
+scanCandles  = input.int(title="Candles to scan", defval=4, minval=3, maxval=6, tooltip="Number of recent candles (including the active candle) to scan (e.g. 3, 4, or 5)")
+
+// ────────────── Timeframe Arrays ──────────────
+tf_strat   = array.from("D", "2D", "3D", "W", "2W")    // Multi-candle STRAT patterns
+tf_single  = array.from("D", "W")                      // Single-candle conditions
+
+// ────────────── Create Table ──────────────
+tbl = table.new(position.top_right, columns=2, rows=maxRows, border_width=1, frame_color=color.black)
+
+// ────────────── Array for Condition Strings ──────────────
+var string[] conditionTexts = array.new_string()
+
+// ────────────── Helper Function for Background Color ──────────────
+f_getBgColor(condStr) =>
+    condBullish = str.contains(condStr, "2d-2u") or str.contains(condStr, "1-2d-2u") or 
+                  str.contains(condStr, "3-1-2u") or str.contains(condStr, "2d-1-2u") or 
+                  str.contains(condStr, "2u-1-2u") or str.contains(condStr, "Hammer") or 
+                  str.contains(condStr, "Failed 2 Down") or str.contains(condStr, "Bullish PMG")
+    condBearish = str.contains(condStr, "2u-2d") or str.contains(condStr, "1-2u-2d") or 
+                  str.contains(condStr, "3-2u-2d") or str.contains(condStr, "3-1-2d") or 
+                  str.contains(condStr, "2u-1-2d") or str.contains(condStr, "2d-1-2d") or 
+                  str.contains(condStr, "Shooting Star") or str.contains(condStr, "Failed 2 Up") or 
+                  str.contains(condStr, "Bearish PMG")
+    condBullish ? color.new(color.green, 15) : condBearish ? color.new(color.red, 15) : color.gray
+
+// ────────────── Function: f_scan_strat ──────────────
+// This function pulls OHLC data from the timeframe "tf" and scans only the most recent 'scanCandles' bars.
+// For each candidate (using a base offset j) we check each STRAT pattern if enough candles exist.
+f_scan_strat(tf) =>
+    // Get series data from the desired timeframe.
+    [o, h, l, c] = request.security(syminfo.tickerid, tf, [open, high, low, close])
+    string pat = ""
+    // Loop over the most recent scanCandles (offset 0 = current bar)
+    for j = 0 to scanCandles - 1
+        // --- 2-candle patterns (require at least 2 candles: indices j+1 and j) ---
+        if j <= scanCandles - 2
+            // 2u-2d Reversal: previous candle bullish and current candle bearish → Bearish
+            if (c[j+1] > o[j+1]) and (c[j] < o[j])
+                pat := pat == "" ? "2u-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2u-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 2d-2u Reversal: previous candle bearish and current candle bullish → Bullish
+            if (c[j+1] < o[j+1]) and (c[j] > o[j])
+                pat := pat == "" ? "2d-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2d-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+        // --- 3-candle patterns (require at least 3 candles: indices j+2, j+1, j) ---
+        if j <= scanCandles - 3
+            // 1-3 (Nirvana): candle[j+2] is the oldest, candle[j+1] is inside that, and candle[j] is outside → Typically Bullish
+            if (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (h[j] > h[j+1] and l[j] < l[j+1])
+                pat := pat == "" ? "1-3 Nirvana (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "1-3 Nirvana (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 3-1 (Holy Grail): candle[j+2] is the oldest, candle[j+1] is outside that, and candle[j] is inside → Typically Ambiguous
+            if (h[j+1] > h[j+2] and l[j+1] < l[j+2]) and (h[j] < h[j+1] and l[j] > l[j+1])
+                pat := pat == "" ? "3-1 Holy Grail (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "3-1 Holy Grail (" + tf + ", offset=" + str.tostring(j) + ")"
+        // --- 4-candle patterns (require at least 4 candles: indices j+3, j+2, j+1, j) ---
+        if j <= scanCandles - 4
+            // 3-2-2 Reversal: candle[j+3] as "3", candle[j+2] is an outside bar, candle[j+1] bullish, and candle[j] bearish
+            if (h[j+2] > h[j+3] and l[j+2] < l[j+3]) and (c[j+1] > o[j+1]) and (c[j] < o[j])
+                pat := pat == "" ? "3-2u-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "3-2u-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            if (h[j+2] > h[j+3] and l[j+2] < l[j+3]) and (c[j+1] < o[j+1]) and (c[j] > o[j])
+                pat := pat == "" ? "3-2d-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "3-2d-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 1-2-2 Reversal: candle[j+3] as "1" (inside bar), candle[j+2] directional, candle[j+1] directional, candle[j] reversal
+            if (h[j+2] < h[j+3] and l[j+2] > l[j+3]) and (c[j+1] > o[j+1]) and (c[j] < o[j])
+                pat := pat == "" ? "1-2u-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "1-2u-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            if (h[j+2] < h[j+3] and l[j+2] > l[j+3]) and (c[j+1] < o[j+1]) and (c[j] > o[j])
+                pat := pat == "" ? "1-2d-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "1-2d-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 1-2-2 Continuation patterns:
+            if (h[j+2] < h[j+3] and l[j+2] > l[j+3]) and (c[j+1] > o[j+1]) and (c[j] > o[j])
+                pat := pat == "" ? "1-2u-2u Continuation (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "1-2u-2u Continuation (" + tf + ", offset=" + str.tostring(j) + ")"
+            if (h[j+2] < h[j+3] and l[j+2] > l[j+3]) and (c[j+1] < o[j+1]) and (c[j] < o[j])
+                pat := pat == "" ? "1-2d-2d Continuation (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "1-2d-2d Continuation (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 3-1-2 Reversal patterns:
+            if (h[j+2] > h[j+3] and l[j+2] < l[j+3]) and (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (c[j] > o[j])
+                pat := pat == "" ? "3-1-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "3-1-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            if (h[j+2] > h[j+3] and l[j+2] < l[j+3]) and (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (c[j] < o[j])
+                pat := pat == "" ? "3-1-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "3-1-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 2-1-2 Reversal patterns:
+            if (c[j+2] > o[j+2]) and (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (c[j] < o[j])
+                pat := pat == "" ? "2u-1-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2u-1-2d Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            if (c[j+2] < o[j+2]) and (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (c[j] > o[j])
+                pat := pat == "" ? "2d-1-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2d-1-2u Reversal (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 2-1-2 Continuation patterns:
+            if (c[j+2] > o[j+2]) and (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (c[j] > o[j])
+                pat := pat == "" ? "2u-1-2u Continuation (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2u-1-2u Continuation (" + tf + ", offset=" + str.tostring(j) + ")"
+            if (c[j+2] < o[j+2]) and (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (c[j] < o[j])
+                pat := pat == "" ? "2d-1-2d Continuation (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2d-1-2d Continuation (" + tf + ", offset=" + str.tostring(j) + ")"
+            // 3-1-3 Expansion: 4 candles required.
+            if (h[j+2] > h[j+3] and l[j+2] < l[j+3]) and (h[j+1] < h[j+2] and l[j+1] > l[j+2]) and (h[j] > h[j+1] and l[j] < l[j+1])
+                pat := pat == "" ? "3-1-3 Expansion (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "3-1-3 Expansion (" + tf + ", offset=" + str.tostring(j) + ")"
+            // Randy Jackson patterns (4 candles):
+            if j <= scanCandles - 4
+                if (c[j+3] > o[j+3]) and (c[j+2] > o[j+2]) and (c[j+1] < o[j+1]) and (c[j] > o[j])
+                    pat := pat == "" ? "2u-2u-2d-2u Randy Jackson (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2u-2u-2d-2u Randy Jackson (" + tf + ", offset=" + str.tostring(j) + ")"
+                if (c[j+3] < o[j+3]) and (c[j+2] < o[j+2]) and (c[j+1] > o[j+1]) and (c[j] < o[j])
+                    pat := pat == "" ? "2d-2d-2u-2d Randy Jackson (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "2d-2d-2u-2d Randy Jackson (" + tf + ", offset=" + str.tostring(j) + ")"
+    pat
+
+// ────────────── Function: f_scan_single ──────────────
+// Scans the most recent 'scanCandles' for single-candle conditions.
+f_scan_single(tf) =>
+    [o, h, l, c] = request.security(syminfo.tickerid, tf, [open, high, low, close])
+    string pat = ""
+    for j = 0 to scanCandles - 1
+        // Hammer Candle (Bullish Reversal) for candle at offset j.
+        realBody    = math.abs(c[j] - o[j])
+        lowerShadow = math.min(o[j], c[j]) - l[j]
+        upperShadow = h[j] - math.max(o[j], c[j])
+        if lowerShadow >= 2 * realBody and upperShadow <= 0.25 * realBody and math.min(o[j], c[j]) >= (h[j] + l[j]) / 2
+            pat := pat == "" ? "Hammer (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "Hammer (" + tf + ", offset=" + str.tostring(j) + ")"
+        // Shooting Star (Bearish Reversal)
+        if upperShadow >= 2 * realBody and lowerShadow <= 0.25 * realBody and math.max(o[j], c[j]) <= (h[j] + l[j]) / 2
+            pat := pat == "" ? "Shooting Star (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "Shooting Star (" + tf + ", offset=" + str.tostring(j) + ")"
+        // Failed 2 Down / 2 Up require at least 2 candles.
+        if j <= scanCandles - 2
+            range_prev = h[j+1] - l[j+1]
+            if (l[j] < l[j+1]) and (c[j] > l[j+1]) and (c[j] >= l[j+1] + 0.4 * range_prev) and (c[j] <= l[j+1] + 0.8 * range_prev)
+                pat := pat == "" ? "Failed 2 Down (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "Failed 2 Down (" + tf + ", offset=" + str.tostring(j) + ")"
+            if (h[j] > h[j+1]) and (c[j] < h[j+1]) and (c[j] >= h[j+1] - 0.8 * range_prev) and (c[j] <= h[j+1] - 0.4 * range_prev)
+                pat := pat == "" ? "Failed 2 Up (" + tf + ", offset=" + str.tostring(j) + ")" : pat + ", " + "Failed 2 Up (" + tf + ", offset=" + str.tostring(j) + ")"
+    pat
+
+// ────────────── PMG (Pivot Machine Gun) Logic ──────────────
+// (PMG is still evaluated on the current timeframe as before.)
+swingLength    = 3
+swingHighCond  = ta.highest(high, swingLength) == high
+swingLowCond   = ta.lowest(low, swingLength) == low
+var int highCount = 0
+var int lowCount  = 0
+highCount := swingHighCond ? highCount + 1 : 0
+lowCount  := swingLowCond  ? lowCount + 1  : 0
+pmgLow  = highCount >= 4 ? ta.lowest(low, highCount) : na
+pmgHigh = lowCount  >= 4 ? ta.highest(high, lowCount) : na
+isBearishPMG = highCount >= 4 and not na(pmgLow) and (close < pmgLow)
+isBullishPMG = lowCount  >= 4 and not na(pmgHigh) and (close > pmgHigh)
+if isBearishPMG
+    array.push(conditionTexts, "Bearish PMG (Current)")
+if isBullishPMG
+    array.push(conditionTexts, "Bullish PMG (Current)")
+
+// ────────────── Scan Across Timeframes ──────────────
+// For each timeframe in tf_strat, scan for multi-candle STRAT patterns.
+for i = 0 to array.size(tf_strat) - 1
+    tf_val = array.get(tf_strat, i)
+    patStrat = f_scan_strat(tf_val)
+    if patStrat != ""
+        // Simplified in-force check (example): compare current close to previous high on that timeframe.
+        inForceStatus = request.security(syminfo.tickerid, tf_val, close) > request.security(syminfo.tickerid, tf_val, high[1]) ? "In-Force" : "Not In-Force"
+        array.push(conditionTexts, patStrat + " [" + inForceStatus + "]")
+
+// For each timeframe in tf_single, scan for single-candle conditions.
+for i = 0 to array.size(tf_single) - 1
+    tf_val = array.get(tf_single, i)
+    patSingle = f_scan_single(tf_val)
+    if patSingle != ""
+        array.push(conditionTexts, patSingle)
+
+// ────────────── Populate the Table Dynamically ──────────────
+numConditions = array.size(conditionTexts)
+for i = 0 to maxRows - 1
+    if i < numConditions
+        table.cell(tbl, column=0, row=i, text=str.tostring(i + 1), text_size=size.small, bgcolor=color.gray)
+        bgColor = useColorBg ? f_getBgColor(array.get(conditionTexts, i)) : color.gray
+        table.cell(tbl, column=1, row=i, text=array.get(conditionTexts, i), text_size=size.small, bgcolor=bgColor)
+    else
+        table.cell(tbl, column=0, row=i, text="", bgcolor=na)
+        table.cell(tbl, column=1, row=i, text="", bgcolor=na)
+
+
+
+// okay, so to clarify, please make only the STRAT pattern detection based on the user-input Candles to scan. However, for the f_scan_single have it only look at the current candle  or candle before it. 
+
+// Next, add an element that can de-duplicate the elements of the table. There are multiple duplicates of the same STRAT pattern and single candle condition identified. Or ensure up-front that if a string from str.tostring() is unique to the table and will not be duplicated. All strings  listed in the table should be unique
+
+
+// Next, if possible, arrange the table to place the the single candle results at the top, as well as if a failed 2 down or up are found on the week, followed by any STRAT conditions that are currently in-force, followed by the remainder.
+
+// Finally, I'm noticing that neither the Nirvana pattern  (1-3) nor Holy Grail (3-1) are being identified. Examine those two to make sure they're coded correctly
