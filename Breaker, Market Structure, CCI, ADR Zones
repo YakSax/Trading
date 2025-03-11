@@ -151,6 +151,25 @@ upperBand_3 = plot(upperBandValue3, title="Upper Band #3", color = color.rgb(91,
 lowerBand_3 = plot(lowerBandValue3, title="Lower Band #3", color = color.rgb(91, 131, 127, 60), offset = offset, display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
 fill(upperBand_3, lowerBand_3,      title="Bands Fill #3", color = color.new(color.teal, 100),   display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
 
+
+text_VWAP = 'VWAP'
+var color_text_VWAP = input.color(defval = color.rgb(41, 98, 255, 30), title = text_VWAP, group="VWAP Settings")
+
+//Workaround to disable color management on the standard tab Style for plots
+//Custom inputs for colors should be used instead
+transp_func() =>
+    transp_0 = 0
+    transp_0
+
+draw_label_Vwap(_x, _y, _text, _xloc, _yloc, _color, _style, _textcolor, _size, _textalign, _tooltip) =>
+    dlabel = label.new(x = _x, y = _y, text = _text, xloc = _xloc, yloc = _yloc, color = _color, style = _style, textcolor = _textcolor, size = _size, textalign = _textalign, tooltip = _tooltip)
+    label.delete(dlabel[1])
+
+// if not (hideVwap or (hideonDWM and timeframe.isdwm))
+if not (hideVwap or (hideonDWM and timeframe.isdwm))
+    draw_label_Vwap(bar_index + 1, vwapValue, text_VWAP, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_text_VWAP, transp_func()), size.normal, text.align_left, '')
+
+
 // Define Bullish/Bearish Condition for VWAP
 isBullish_Vwap = close > vwapValue
 isBearish_Vwap = close < vwapValue
@@ -2161,20 +2180,20 @@ dnPlot = plot(show_SuperTrend and Suprtrend == 1 ? na : dn, title='Down Trend', 
 
 // Buy signal shapes
 buySignal = Suprtrend == 1 and Suprtrend[1] == -1
-plotshape(show_SuperTrend and buySignal ? up : na, title='UpTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.rgb(76, 175, 79, 60))
-plotshape(show_SuperTrend and buySignal and showsignals ? up : na, title='Buy', text='ST Buy', location=location.absolute, style=shape.labelup, size=size.tiny, color=color.rgb(76, 175, 79, 60), textcolor=color.white)
+plotshape(show_SuperTrend and buySignal ? up : na, title='UpTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.rgb(76, 175, 79, 70))
+plotshape(show_SuperTrend and buySignal and showsignals ? up : na, title='Buy', text='ST Buy', location=location.absolute, style=shape.labelup, size=size.tiny, color=color.rgb(76, 175, 79, 70), textcolor=color.white)
 
 // Sell signal shapes
 sellSignal = Suprtrend == -1 and Suprtrend[1] == 1
-plotshape(show_SuperTrend and sellSignal ? dn : na, title='DownTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.rgb(255, 82, 82, 60))
-plotshape(show_SuperTrend and sellSignal and showsignals ? dn : na, title='Sell', text='ST Sell', location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.rgb(255, 82, 82, 60), textcolor=color.white)
+plotshape(show_SuperTrend and sellSignal ? dn : na, title='DownTrend Begins', location=location.absolute, style=shape.circle, size=size.tiny, color=color.rgb(255, 82, 82, 70))
+plotshape(show_SuperTrend and sellSignal and showsignals ? dn : na, title='Sell', text='ST Sell', location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.rgb(255, 82, 82, 70), textcolor=color.white)
 
 // A dummy plot to serve as a reference for fill()
 mPlot = plot(ohlc4, title='', style=plot.style_circles, linewidth=math.max(1, 0))
 
 // Define SuperTrend fill colors based on the trend
-longFillColor  = Suprtrend == 1 ? color.rgb(76, 175, 79, 90)   : color.rgb(255, 255, 255, 97)
-shortFillColor = Suprtrend == -1 ? color.rgb(255, 82, 82, 90)   : color.rgb(255, 255, 255, 97)
+longFillColor  = Suprtrend == 1 ? color.rgb(76, 175, 79, 93)   : color.rgb(255, 255, 255, 97)
+shortFillColor = Suprtrend == -1 ? color.rgb(255, 82, 82, 93)   : color.rgb(255, 255, 255, 97)
 
 // Apply fills only when show_SuperTrend is true by conditionally setting the color
 fill(mPlot, upPlot, title='UpTrend Highlighter', color= show_SuperTrend ? longFillColor  : na)
@@ -2269,7 +2288,7 @@ getTextSize(tableSizeInput) =>
 var table indicator_table = table.new(position=getTablePosition(tablePositionInput), columns=2, rows=7, bgcolor=color.gray)
 textSize_Indicator_table = getTextSize(tableSizeInput)
 
-table.cell(indicator_table, 0, 0, "Abv/Blo VWAP", text_color=color.black, bgcolor=color.rgb(200, 200, 200))
+table.cell(indicator_table, 0, 0, "Abv/Blo VWAP", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
 table.cell(indicator_table, 1, 0, icon_Vwap, text_color=color.black, bgcolor=bgColor_Vwap, text_size=textSize_Indicator_table)
 
 table.cell(indicator_table, 0, 1, "EMAs Aligned", text_color=color.black, bgcolor=color.rgb(200, 200, 200), text_size=textSize_Indicator_table)
@@ -2416,7 +2435,7 @@ if showsupres
 
 
 // ========================================================================================
-// ATR ZONES
+// ADR ZONES
 // with credit to ATRvsDTR + ADR Zone + SSS50% by theStratuchiha
 // ========================================================================================
 
@@ -2487,7 +2506,7 @@ var blue = #7df8ff52 ////Open WK
 
 
 //***Start of Inputs
-var labels_enabled = input.bool(defval = true, title = 'Show labels')
+var labels_enabled = input.bool(defval = true, title = 'Show ADR labels')
 
 
 var adr_1 = input.int(title = 'ADR 1', defval = 10, minval = 1, group = 'ADR Periods')
@@ -2576,9 +2595,9 @@ fiftypercentLevel2 = (lowofTFinput2 - highofTFinput2) * 0.5 + highofTFinput2
 
 //Workaround to disable color management on the standard tab Style for plots
 //Custom inputs for colors should be used instead
-transp_func() =>
-    transp_0 = 0
-    transp_0
+// transp_func() =>     COMMENTED OUT TO ACCOMODATE VWAP LABELING ABOVE. transp_func() comes from theStratuchiha
+//     transp_0 = 0
+//     transp_0
 
 //***End of local functions definiton***
 
