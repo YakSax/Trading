@@ -1,0 +1,103 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Sax
+
+//*******NOTE: THIS CODE IS ONLY USEFUL ON THE DAILY TIMEFRAME*******
+
+//@version=6
+indicator("MACD 20/120 5/10 Ema Buy/Sell Signals", overlay=true)
+
+// — INPUTS —
+macdFastLen    = input.int(20, "MACD Fast Length")
+macdSlowLen    = input.int(120,"MACD Slow Length")
+macdSignalLen  = input.int(9,  "MACD Signal Smoothing")
+emaFastLen    = input.int(5,   "EMA Fast Length")
+emaMedLen     = input.int(10,  "EMA Medium Length")
+emaLongLen    = input.int(20,  "EMA Long Length")
+rb            = input.int(0,   "Offset Bars", minval=0)  // for plotshape offset
+signalOffset   = input.int(0,   "Signal Offset", minval=-100, maxval=100)
+
+// — MACD OSCILLATOR (built-in) —
+[macdLine, macdSignal, _] = ta.macd(close, macdFastLen, macdSlowLen, macdSignalLen)
+
+
+// — PRICE SERIES & MOVING AVERAGES —
+macdFast = ta.ema(close, macdFastLen)
+macdSlow = ta.ema(close, macdSlowLen)
+
+// — EMAs FOR PRICE FILTERS —
+emaFast  = ta.ema(close, emaFastLen)
+emaMed   = ta.ema(close, emaMedLen)
+emaLong  = ta.ema(close, emaLongLen)
+
+
+// — SIGNAL CONDITIONS —
+// Sell #1: MACD line crosses under its signal AND EMA5 < EMA10
+sell1 = ta.crossunder(macdLine, macdSignal) and (emaFast < emaMed)
+
+// Sell #2: MACD line is below signal AND EMA5 crosses under EMA10 while EMA10 < EMA20
+sell2 = (macdLine < macdSignal) and ta.crossunder(emaFast, emaMed) and (emaMed < emaLong)
+
+// Sell #3: MACD line is above signal but within 1.5 pts AND EMA5 crosses under EMA10
+sell3 = (macdLine > macdSignal) and ((macdLine - macdSignal) < 1.5) and ta.crossunder(emaFast, emaMed)
+
+
+sell4 = ta.crossunder(macdLine, macdSignal) // and ta.crossunder(emaFast,emaMed)
+
+
+// Combined Sell
+sellSignal = sell1 or sell2 or sell3 or sell4
+
+// Buy #1: MACD line below signal but rising AND EMA5 crosses over EMA10
+buy1 = (macdLine < macdSignal) and (macdLine > macdLine[1]) and ta.crossover(emaFast, emaMed)
+
+// Buy #2: MACD line crosses above signal AND EMA5 > EMA10
+buy2 = ta.crossover(macdLine, macdSignal) and (emaFast > emaMed)
+
+// Combined Buy
+buySignal = buy1 or buy2
+
+
+
+// — PLOTSHAPES —
+// Sell
+plotshape(sellSignal,
+     title      = "Sell Signal",
+     text       = "Sell",
+     style      = shape.labeldown,
+     location   = location.abovebar,
+     color      = color.new(color.red, 70),
+     textcolor  = color.new(color.white, 50),
+     offset     = signalOffset)
+
+// Buy
+plotshape(buySignal,
+     title      = "Buy Signal",
+     text       = "Buy",
+     style      = shape.labelup,
+     location   = location.belowbar,
+     color      = color.new(#17d660, 70),
+     textcolor  = color.new(color.white, 50),
+     offset     = signalOffset)
+
+// — BOOLEAN SIGNALS (for strategy.entry or further logic) —
+var bool sellCondition = false
+var bool buyCondition  = false
+sellCondition := sellSignal
+buyCondition  := buySignal
+
+// — ALERT CONDITIONS —
+// Sell Alerts
+alertcondition(sell1, title="Sell Alert 1", message="MACD Fast crossed below Slow and EMA5 < EMA10")
+alertcondition(sell2, title="Sell Alert 2", message="EMA5 crossed below EMA10 below EMA20 while MACD < Slow")
+alertcondition(sell3, title="Sell Alert 3", message="MACD Fast > Slow but within 1.5diff and EMA5 crossed below EMA10")
+alertcondition(sellSignal, title="Sell Alert (Any)", message="One of the sell conditions has been met")
+
+// Buy Alerts
+alertcondition(buy1, title="Buy Alert 1", message="MACD Fast inclining below Slow and EMA5 crossed above EMA10")
+alertcondition(buy2, title="Buy Alert 2", message="MACD Fast crossed above Slow and EMA5 > EMA10")
+alertcondition(buySignal, title="Buy Alert (Any)", message="One of the buy conditions has been met")
+
+// — DEBUG: PLOT MACD LINES —
+// (Use “Data Window” or hover to see exact values per bar)
+// plot(macdLine,   title="MACD Line",   linewidth=2)
+// plot(macdSignal, title="Signal Line", linewidth=2)
