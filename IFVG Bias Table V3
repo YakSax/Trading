@@ -1,0 +1,249 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Sax
+
+// How it works
+// 1) getRecentIFVG(tf) runs on your chosen timeframe via request.security().
+// 2) It scans for raw FVGs meeting the ATR‐width filter, then immediately checks whether price “inverts” them (close breaks into the gap) and captures that bar’s timestamp.
+// 3) Only the three latest inversions are kept; the single most recent is returned.
+// 4) On your chart timeframe, we test if price is above the bottom of a bullish IFVG (or below the top of a bearish IFVG) and assign the ▲/▼ icon and green/red/gray background.
+// 5) Finally, the 2×3 table is drawn on the last bar—no boxes are created or deleted anywhere.
+
+// The great difficulty with attempting to find the most recent inverted fair value gap on different timeframes is a complex problem of arrays on other timeframes and Pinescript's inability to "serialize" the array across request.security(), causing runtime errors
+
+
+// Bullish IFVG (i.e. a bearish FVG inverted when price closed back above its top) remains “live” so long as price stays above its bottom boundary. It only gets invalidated—and thus should be removed—when price closes below that bottom price.
+// Bearish IFVG (i.e. a bullish FVG inverted when price closed back below its bottom) stays valid so long as price stays below its top boundary. It only gets removed when price closes above that top price.
+
+
+//@version=5
+indicator("Multi-TF IFVG Table", overlay=false)
+
+// === Inputs ===
+show_ifvg       = input.bool(true,   "Show IFVG Table", group="IFVG Settings")
+atr_multi       = input.float(0.25,   "ATR Multiplier", group="IFVG Settings", step=0.25, minval=0)
+signal_pref     = input.string("Close","Signal Based On", options=["Close","Wick"], group="IFVG Settings")
+wt              = signal_pref == "Wick"
+
+tableSizeInput  = input.string("Small", "Table Size",   options=["Small","Medium","Large"], group="Indicator Table")
+tablePosInput   = input.string("Bottom Right","Table Position",
+                 options=["Top Left","Top Right","Bottom Left","Bottom Right"], group="Indicator Table")
+
+// ― outside of any function ―
+atr1h = request.security(syminfo.tickerid, "60",ta.atr(200) * atr_multi,gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+// ==========================================
+// IDENTIFY FAIR VALUE GAPS FOR THE TABLE
+// ==========================================
+
+
+// Returns [fvgTime, fvgBot, fvgTop, fvgDir, iconFVG, bgFVG]
+f_getLastFVG() =>
+    // same ATR threshold
+    atr_val = atr1h
+
+    // detect a new raw gap this bar
+    isUpGap   = (low > high[2]) and (close[1] > high[2])
+    isDownGap = (high < low[2])  and (close[1] < low[2])
+    width     = math.abs(isUpGap   ? low - high[2]
+                      : isDownGap ? low[2] - high
+                                 : 0.0)
+
+    // persistent storage of latest raw gap
+    var int    fvgTime = na
+    var float  fvgBot  = na
+    var float  fvgTop  = na
+    var int    fvgDir  = 0
+
+    // capture new gap
+    if isUpGap and width >= atr_val
+        fvgTime := time[1]
+        fvgBot  := low
+        fvgTop  := high[2]
+        fvgDir  := 1    // bullish gap
+    if isDownGap and width >= atr_val
+        fvgTime := time[1]
+        fvgBot  := low[2]
+        fvgTop  := high
+        fvgDir  := -1   // bearish gap
+
+    // clear it if fully invalidated (price closes into it)
+    if (fvgDir == 1  and close <  fvgBot) or
+       (fvgDir == -1 and close >  fvgTop)
+        fvgDir := 0
+        fvgTime := na
+
+    // build icon & bg
+    fvgBull = fvgDir == 1
+    fvgBear = fvgDir == -1
+    iconFVG = fvgBull ? "▲"  : fvgBear ? "▼" : "--"
+    bgFVG   = fvgBull ? color.green
+             : fvgBear ? color.red
+             : color.gray
+
+    [fvgTime, fvgBot, fvgTop, fvgDir, iconFVG, bgFVG]
+
+ 
+// ==========================================
+// IDENTIFY INVERSE FAIR VALUE GAPS FOR THE TABLE
+// ==========================================
+
+
+// === Helper struct ===
+type IFVGStruct
+    int    time
+    float  bot
+    float  top
+    int    dir   //  1=bullish IFVG, -1=bearish, 0=none
+
+// VICTORY!!!! THIS VERSION WORKS.  HOWEVER, WHEN PRICE RETAPS AN IFVG IT CAUSES A MITIGATION THAT REVERTS THE TABLE TO GRAY -- EVEN IF PRICE GOES BACK ABOVE/BELOW WHERE IFVG RETURNS TO BEING VALID
+// NEEDS A PERSISTENCE ASPECT
+// Returns [invTime, invBot, invTop, invDir, icon, bg]
+f_getLastInv() =>
+    // 1) ATR threshold (using your 1h ATR if you prefer)
+    atr_val = atr1h
+
+    // 2) Detect brand-new FVG on this bar
+    isUpGap   = (low > high[2]) and (close[1] > high[2])
+    isDownGap = (high < low[2]) and (close[1] < low[2])
+    width     = math.abs(isUpGap   ? low - high[2]
+                      : isDownGap ? low[2] - high
+                                 : 0.0)
+
+    // 3) Persistent storage of the *latest* raw gap
+    //    (only one slot, no arrays)
+    var int   rawTime = na
+    var float rawBot  = na
+    var float rawTop  = na
+    var int   rawDir  = 0
+    if isUpGap and width >= atr_val
+        rawTime := time[1]
+        rawBot  := low
+        rawTop  := high[2]
+        rawDir  :=  1
+    if isDownGap and width >= atr_val
+        rawTime := time[1]
+        rawBot  := low[2]
+        rawTop  := high
+        rawDir  := -1
+
+    // 3b) Optional: drop raw gaps older than 1000 bars
+    //     (bar_index is a global counter of bars since chart start)
+    if not na(rawTime) and bar_index - ta.valuewhen(rawTime, bar_index, 0) > 1000
+        rawDir := 0
+        rawTime := na
+
+    // 4) Test for a *new* inversion THIS bar, using wick vs close
+    //      bullish IFVG: rawDir==-1 and price pokes above rawTop
+    //      bearish IFVG: rawDir==1  and price pokes below rawBot
+    usePrice = wt ? (rawDir == -1 ? high : low) : close
+    newInv   = false
+
+    var int    invTime = na
+    var float  invBot  = na
+    var float  invTop  = na
+    var int    invDir  = 0
+
+    // bearish FVG inverted → bullish IFVG
+    if rawDir == -1 and usePrice > rawTop
+        invDir  :=  1
+        invTime := time
+        invBot  := rawBot
+        invTop  := rawTop
+        newInv  := true
+        // ─── PURGE the raw gap so nothing old lingers ───
+        rawDir  := 0
+        rawTime := na
+
+    // bullish FVG inverted → bearish IFVG
+    if rawDir ==  1 and usePrice < rawBot
+        invDir  := -1
+        invTime := time
+        invBot  := rawBot
+        invTop  := rawTop
+        newInv  := true
+        // ─── PURGE the raw gap so nothing old lingers ───
+        rawDir  := 0
+        rawTime := na
+
+    // 5) Persist the *last confirmed* inversion
+    var int    lastInvTime = na
+    var float  lastInvBot  = na
+    var float  lastInvTop  = na
+    var int    lastInvDir  = 0
+
+    if newInv
+        lastInvTime := invTime
+        lastInvBot  := invBot
+        lastInvTop  := invTop
+        lastInvDir  := invDir
+
+    // 6) For display, always use the *persisted* slot
+    invTime := lastInvTime
+    invBot  := lastInvBot
+    invTop  := lastInvTop
+    invDir  := lastInvDir
+
+    // 7) Build icon/bg
+    isBull = invDir == 1 and close > invBot
+    isBear = invDir == -1 and close < invTop
+    icon   = isBull ? "▲" : isBear ? "▼" : "--"
+    bg     = isBull ? color.green : isBear ? color.red : color.gray
+
+    // 8) Return six series every time
+    [invTime, invBot, invTop, invDir, icon, bg]
+
+
+// pull last inversion from each timeframe
+// — IFVG pulls (as before) —
+[ ti15, bi15, Ti15, di15, icon15, bg15 ] = request.security(syminfo.tickerid, "15", f_getLastInv(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[ ti1, bi1, Ti1, di1, icon60, bg60 ] = request.security(syminfo.tickerid, "60", f_getLastInv(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[ ti4, bi4, Ti4, di4, icon240, bg240 ] = request.security(syminfo.tickerid, "240", f_getLastInv(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[ tiD, biD, TiD, diD, iconDay, bgDay ] = request.security(syminfo.tickerid, "D",   f_getLastInv(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+// — FVG pulls (new) —
+[ tf15, fb15, Tf15, fd15, iconF15, bgF15 ] = request.security(syminfo.tickerid, "15", f_getLastFVG(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[ tf1, fb1, Tf1, fd1, iconF60, bgF60 ] = request.security(syminfo.tickerid, "60", f_getLastFVG(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[ tf4, fb4, Tf4, fd4, iconF240, bgF240 ] = request.security(syminfo.tickerid, "240", f_getLastFVG(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[ tfD, fbD, TfD, fdD, iconFD, bgFD ] = request.security(syminfo.tickerid, "D",   f_getLastFVG(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+
+// 2 columns × 8 rows
+var table tbl = table.new(position = tablePosInput == "Top Left"   ? position.top_left   :tablePosInput == "Top Right"  ? position.top_right  : tablePosInput == "Bottom Left"? position.bottom_left: position.bottom_right, columns = 2, rows  = 8, bgcolor = color.gray)
+
+if barstate.islast and show_ifvg
+    textSize = tableSizeInput == "Small"  ? size.tiny :
+               tableSizeInput == "Medium" ? size.small :
+                                             size.normal
+    hdrBg = color.rgb(200,200,200)
+    // 15 min FVG
+    table.cell(tbl, 0, 0, " FVG 15m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 0, iconF15,   text_color=color.black, bgcolor=bgF15,    text_size=textSize)
+
+    // 1h FVG
+    table.cell(tbl, 0, 1, " FVG 1h", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 1, iconF60,   text_color=color.black, bgcolor=bgF60,    text_size=textSize)
+
+    // 4h FVG
+    table.cell(tbl, 0, 2, " FVG 4h", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 2, iconF240,  text_color=color.black, bgcolor=bgF240,   text_size=textSize)
+
+    // D FVG
+    table.cell(tbl, 0, 3, " FVG D",  text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 3, iconFD,    text_color=color.black, bgcolor=bgFD,     text_size=textSize)
+
+    // 15min IFVG
+    table.cell(tbl, 0, 4, "IFVG 15m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 4, icon15,    text_color=color.black, bgcolor=bg15,     text_size=textSize)
+
+    // 1h IFVG
+    table.cell(tbl, 0, 5, "IFVG 1h", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 5, icon60,    text_color=color.black, bgcolor=bg60,     text_size=textSize)
+
+    // 4h IFVG
+    table.cell(tbl, 0, 6, "IFVG 4h", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 6, icon240,   text_color=color.black, bgcolor=bg240,    text_size=textSize)
+
+    // D IFVG
+    table.cell(tbl, 0, 7, "IFVG D",  text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(tbl, 1, 7, iconDay,   text_color=color.black, bgcolor=bgDay,    text_size=textSize)
+
