@@ -1,13 +1,14 @@
 // This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
-// ©LuxAlgo
+// ©Sax
 
 //@version=5
 indicator("Inversion Fair Value Gaps (IFVG) v2", shorttitle = "IFVG v2", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
 //---------------------------------------------------------------------------------------------------------------------}
 //Settings
 //---------------------------------------------------------------------------------------------------------------------{
-show_ifvg = input.bool(true,title = "Show FVG Inversions",group = 'IFVG settings')
-disp_num = input.int(6, maxval = 100, minval = 1, title = "Number of IFVGs to show", group = 'IFVG settings', tooltip = "Specifies the amount of most recent inversion FVG to display in Bullish/Bearish pairs, starting at the current and looking back.")
+show_ifvg = input.bool(true,title = "Show FVG/IFVG Boxes",group = 'IFVG settings')
+
+disp_num = input.int(2, maxval = 100, minval = 1, title = "Number of IFVGs to show", group = 'IFVG settings', tooltip = "Specifies the amount of most recent inversion FVG to display in Bullish/Bearish pairs, starting at the current and looking back.")
 signal_pref = input.string("Close", title = "Signal Preference", options = ["Close","Wick"], group = 'IFVG settings', tooltip = "Choose to send signals based on Wicks or Close Price.")
 wt = signal_pref == "Wick"
 atr_multi = input.float(0.25, step = 0.25,minval = 0,  title = "ATR Multiplier", group = 'IFVG settings', tooltip = "Filters FVGs based on ATR Width, Only displays Inversions that are Greater-Than the ATR*Multiplier.")
@@ -15,10 +16,26 @@ buffer = input.int(100, "Max number of FVGs stored in memory", group = 'IFVG set
 // buffer: if the array reaches the buffer limit (e.g., 25 entries), the script removes the oldest entry using .shift() to prevent memory bloat and Keep only recent/potentially relevant gaps.
 
 //Colors
-green = input.color(color.new(#089981, 80), title = "Bull Color", group = "Colors")
-red = input.color(color.new(#f23645, 80), title = "Bear Color", group = "Colors")
-gray = input.color(#787b8683, title = "Midline Color", group = "Colors")
+green = input.color(color.new(#089981,75), title = "Bull Color", group = "FVG, IFVG, Order Block Box Settings")
+red = input.color(color.new(#f23645, 75), title = "Bear Color", group = "FVG, IFVG, Order Block Box Settings")
+gray = input.color(#787b86, title = "Midline Color", group = "FVG, IFVG, Order Block Box Settings")
+FVG_IFVG_label_color = input.color(color.rgb(186, 188, 196, 50), title = "Box Labels", group = "FVG, IFVG, Order Block Box Settings")
+box_label_size_input = input.string('Small', title = 'Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="FVG, IFVG, Order Block Box Settings")
 invis = color.new(#9b9c9b, 90)
+// // Function to convert user selection into size.____
+GetBoxLabelSize(BoxLabelSize) =>
+    BoxLabelSize == 'Tiny' ? size.tiny : BoxLabelSize == 'Small' ? size.small : BoxLabelSize == 'Normal' ? size.normal : size.small  // Default
+// Convert size settings string into actual size.____ 
+BoxLabelSize   = GetBoxLabelSize(box_label_size_input)
+
+
+
+//------ Box Labels ----------
+var string _ifvgLabel = "IFVG"
+var string _plus     = "+"
+var string _minus    = "-"
+var string _empty    = ""
+
 
 //---------------------------------------------------------------------------------------------------------------------}
 //UDT's   User-Defined Types, containers that structure complex data, keeping it clean and manageable in arrays
@@ -41,12 +58,6 @@ type fvg //Contains Necessary FVG Data to Send to Chart.
     box b1     // box before inversion
     box b2     // box after inversion
 // You may also want to store line or label IDs similarly if you use those.
-
-// Box Labels (borrowed from Super OrderBlock / FVG / BoS Tools by makuchaku & eFe)
-var string _ifvgLabel = "IFVG"
-var string _plus     = "+"
-var string _minus    = "-"
-var string _empty    = ""
 
 //---------------------------------------------------------------------------------------------------------------------}
 //Functions
@@ -147,7 +158,7 @@ send_it(_ary) => // Draws Everything on the Chart. This function draws the boxes
             label_text = value.dir == 1 ? _ifvgLabel + _plus : _ifvgLabel + _minus
 
             if na(value.b2)
-                value.b2 := box.new(left = xval,top = bx_top, right= time, bottom= bx_bot, bgcolor= o_col, border_color = invis, xloc= xloc.bar_time, text= label_text, text_halign = text.align_right, text_valign = text.align_bottom, text_size = size.small, text_color  = gray)
+                value.b2 := box.new(left= xval,top= bx_top,right= time,bottom= bx_bot,bgcolor= o_col,border_color = invis,xloc= xloc.bar_time,text= label_text,text_halign = text.align_right,text_valign = text.align_bottom,text_size = BoxLabelSize,text_color  = FVG_IFVG_label_color)
             else
                 box.set_lefttop   (value.b2, xval,    bx_top)
                 box.set_rightbottom(value.b2, time,   bx_bot)
@@ -161,26 +172,9 @@ send_it(_ary) => // Draws Everything on the Chart. This function draws the boxes
             // box.new(bar_index,bx_top,bar_index+2,bx_bot, bgcolor = o_col, border_color = invis)  // Future projection (2 bars)
             // line.new(bar_index,mid,bar_index+2,mid, color = gray, style = line.style_dashed)    // Future projection (2 bars)
 
-            for stuff in value.labs
-                label_maker(stuff.x,stuff.y,stuff.dir)    // Draw mitigation label:
-
     // _bullboxOB = box.new(left=bar_index - 2, top=high[2], right=bar_index, bottom=math.min(low[2], low[1]), border_color=color.new(obBullColor, obBorderTransparency), border_style=obBoxBorder, border_width=1, bgcolor=obBullColor, 
     //  text=plotLabelOB ? _obLabel  + _plus : _empty, text_halign=text.align_right, text_valign=text.align_bottom, text_size=obLabelSize, text_color=obLabelColor)
 
-//---------------------------------------------------------------------------------------------------------------------}
-// Global Deletion Logic Delete drawings
-// This clears all drawings every bar so they can be re-rendered based on current array contents. This guarantees a clean chart, but:
-// --Can break integration with other scripts (global delete).
-// --Can create flickering or performance lag on heavy load.
-//---------------------------------------------------------------------------------------------------------------------{
-// for boxes in box.all
-//     box.delete(boxes)
-
-// for lines in line.all
-//     line.delete(lines)
-
-// for labels in label.all
-//     label.delete(labels)
 
 //---------------------------------------------------------------------------------------------------------------------}
 //Data Arrays: Tracks both normal FVGs and inversion FVGs. Separated by direction.
@@ -227,49 +221,24 @@ alertcondition(bear_signal, "Bearish Signal")   //Alerts fire only when an IFVG 
 
 //---------------------------------------------------------------------------------------------------------------------}
 
+// NOTES:
+// Explainer of FVG and IFVG Box boundaries
+// 1. Original FVG box boundaries
+// Stored on the fvg struct as:
+// left → value.left — the bar–time when the gap was first detected (in the fvg.new(...) call this is time[1]).    the send_it() function uses bx_left  = value.left   to draw it
+// top → value.top — the upper price bound of the gap (for a bullish FVG this is high[2]; for bearish it’s high).
+// bottom → value.bot — the lower price bound of the gap (for bullish it’s low; for bearish it’s low[2]).
+// right → value.right — the bar–time when the gap “ended” (in fvg.new(...) this is time).  the send_it() function uses   xval  = value.x_val    // set at inversion time so that the “pre-inversion” box is trimmed to end exactly at the inversion time (x_val), once it’s been detected.
 
-        
-            // box.new(bx_left,bx_top,xval,bx_bot,bgcolor = col, border_color = invis, xloc = xloc.bar_time)   // Original fvg box until inversion time
-            // box.new(xval,bx_top,time,bx_bot, bgcolor = o_col, border_color = invis, xloc = xloc.bar_time)   // Box after inversion time (flipped color):
-
-            // // draws a duplicate version of the inversion box and its midline, extending forward the IFVG box from the current bar
-            // line.new(bx_left,mid,time,mid, color = gray, style = line.style_dashed, xloc = xloc.bar_time)   // Dashed midline over total IFVG lifespan:
-            // box.new(bar_index,bx_top,bar_index+2,bx_bot, bgcolor = o_col, border_color = invis)  // Future projection (2 bars)
-            // line.new(bar_index,mid,bar_index+2,mid, color = gray, style = line.style_dashed)    // Future projection (2 bars)
-
-            // for stuff in value.labs
-            //     label_maker(stuff.x,stuff.y,stuff.dir)    // Draw mitigation label:
-
-    // _bullboxOB = box.new(left=bar_index - 2, top=high[2], right=bar_index, bottom=math.min(low[2], low[1]), border_color=color.new(obBullColor, obBorderTransparency), border_style=obBoxBorder, border_width=1, bgcolor=obBullColor, 
-    //  text=plotLabelOB ? _obLabel  + _plus : _empty, text_halign=text.align_right, text_valign=text.align_bottom, text_size=obLabelSize, text_color=obLabelColor)
-
-
-// one thing that I dont understand is what is calling upon inv_manage() to operate over the IFVGs?
-// Yes there are
-// bear_signal = inv_manage(bull_inv_ary)
-// bull_signal = inv_manage(bear_inv_ary)
-// But these are being stored in a variable, and I would presume the management is not able to "outwardly express itself" on the chart because its being directed into another variable, unlike 
-// fvg_manage(bull_fvg_ary,bull_inv_ary)
-// fvg_manage(bear_fvg_ary,bear_inv_ary)
-// which are called upon without being directed into a variable. 
-
-// You're asking an excellent and subtle question — does assigning inv_manage() to a variable prevent it from performing its job? Short Answer: No — it doesn't stop anything.
-// Pine Script Functions ≠ Pure Functions
-// Pine Script functions like inv_manage() can mutate the contents of the arrays passed into them. This is because:
-
-// Pine Script arrays are mutable references (not passed by value).
-
+// 2. IFVG (post-inversion) box boundaries
+// Once an inversion is detected, the struct’s x_val field is set to the timestamp of that bar (value.x_val := time), and on each subsequent bar the script draws the IFVG box as:
+// left → value.x_val — the bar–time when the FVG was mitigated (and flipped)
+// top → value.top — identical to the original FVG’s top
+// bottom → value.bot — identical to the original FVG’s bottom
+// right → time — the current bar’s time, so the IFVG box extends forward from the flip
 // inv_manage() doesn’t just return a value — it updates fields inside the objects in the array, creates new labels (lab.new), and removes entries.
-
 // So even though the fire result is captured in a variable (bear_signal or bull_signal), all the side effects still happen:
-
 // Boxes are updated (value.right := time)
-
 // Direction and state change (value.dir := ...)
-
 // Labels are created and pushed (value.labs.push(...))
-
 // IFVGs are deleted (_ary.remove(i))
-
-
-
