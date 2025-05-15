@@ -1,0 +1,111 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Sax
+
+//@version=5
+indicator("Order Blocks v2", overlay=true)
+
+//────────────────────────────────────────────────────────
+// Inputs (OB logic) ────────────────────────────────────
+length        = input.int(5,    'Volume Pivot Length', minval=1)
+bull_ext_last = input.int(3,    'Bullish OB Count',    minval=1)
+bear_ext_last = input.int(3,    'Bearish OB Count',    minval=1)
+mitigation    = input.string('Wick', 'Mitigation Method'
+                  , options=['Wick','Close'])
+
+//────────────────────────────────────────────────────────
+// Inputs (drawing style) ───────────────────────────────
+show_OB     = input.bool(true,    'Show Order‑Block Boxes', group="Draw Settings")
+green       = input.color(color.new(#089975, 75), 'Bull Box Color', group="Draw Settings")
+red         = input.color(color.new(#c02748, 75), 'Bear Box Color', group="Draw Settings")
+gray        = input.color(#787b86,             'Mid‑Line Color', group="Draw Settings")
+invis       = color.new(#9b9c9b, 90)
+
+//────────────────────────────────────────────────────────
+// Inputs (label style) ─────────────────────────────────
+var string _obLabel    = "OB"
+var string _plus       = "+"
+var string _minus      = "-"
+boxLabelSize_input     = input.string('Small', 'Box Label Size'
+                         , options=['Tiny','Small','Normal']
+                         , group="Draw Settings")
+boxLabelSize = boxLabelSize_input == 'Tiny'  ? size.tiny  :
+               boxLabelSize_input == 'Small' ? size.small : size.normal
+labelColor   = input.color(color.rgb(186, 188, 196, 50), 'Label Color', group="Draw Settings")
+
+//────────────────────────────────────────────────────────
+// Helper Functions ─────────────────────────────────────
+// Capture a new OB when `condition` fires
+get_coordinates(condition, top, btm, ob_val) =>
+    var float[] ob_top  = array.new_float()
+    var float[] ob_btm  = array.new_float()
+    var float[] ob_avg  = array.new_float()
+    var int[]   ob_left = array.new_int()
+    float ob = na
+    if condition
+        avg = math.avg(top, btm)
+        array.unshift(ob_top,  top)
+        array.unshift(ob_btm,  btm)
+        array.unshift(ob_avg,  avg)
+        array.unshift(ob_left, time[length])
+        ob := ob_val
+    [ob_top, ob_btm, ob_avg, ob_left, ob]
+
+// Prune any OB whose level has been pierced (“mitigated”)
+remove_mitigated(ob_top, ob_btm, ob_left, ob_avg, target, bull) =>
+    target_arr = bull ? ob_btm : ob_top
+    for elem in target_arr
+        idx = array.indexof(target_arr, elem)
+        if (bull ? target < elem : target > elem)
+            array.remove(ob_top,  idx)
+            array.remove(ob_btm,  idx)
+            array.remove(ob_avg,  idx)
+            array.remove(ob_left, idx)
+            true
+    false
+
+//────────────────────────────────────────────────────────
+// Core OB Logic ────────────────────────────────────────
+target_bull = mitigation == 'Close' ? ta.lowest(close, length) : ta.lowest(length)
+target_bear = mitigation == 'Close' ? ta.highest(close, length) : ta.highest(length)
+var os = 0
+os := high[length] > ta.highest(length) ? 0 : low[length]  < ta.lowest(length)  ? 1 : os[1]
+phv = ta.pivothigh(volume, length, length)
+
+[bull_top, bull_btm, bull_avg, bull_left, bull_ob] = get_coordinates(not na(phv) and os == 1, hl2[length], low[length], low[length])
+[bear_top, bear_btm, bear_avg, bear_left, bear_ob] = get_coordinates(not na(phv) and os == 0, high[length], hl2[length], high[length])
+
+_ = remove_mitigated(bull_top, bull_btm, bull_left, bull_avg, target_bull, true)
+_ = remove_mitigated(bear_top, bear_btm, bear_left, bear_avg, target_bear, false)
+
+//────────────────────────────────────────────────────────
+// Draw OBs IFVG‑Style + Labels ─────────────────────────
+if show_OB and barstate.islast
+    // bullish OBs
+    for i = 0 to math.min(bull_ext_last-1, array.size(bull_top)-1)
+        lt  = array.get(bull_left, i)
+        tp  = array.get(bull_top,  i)
+        bt  = array.get(bull_btm,  i)
+        mid = array.get(bull_avg,  i)
+        label_text = _obLabel + _plus
+        box.new(lt, tp, time, bt, bgcolor=green, border_color=invis, xloc=xloc.bar_time, text=label_text, text_halign=text.align_right, text_valign=text.align_bottom, text_size=boxLabelSize, text_color=labelColor)
+        line.new(lt, mid, time, mid,
+                 color=gray,
+                 style=line.style_dashed,
+                 xloc=xloc.bar_time)
+
+    // bearish OBs
+    for i = 0 to math.min(bear_ext_last-1, array.size(bear_top)-1)
+        lt  = array.get(bear_left, i)
+        tp  = array.get(bear_top,  i)
+        bt  = array.get(bear_btm,  i)
+        mid = array.get(bear_avg,  i)
+        label_text = _obLabel + _minus
+        box.new(lt, tp, time, bt, bgcolor=red, border_color=invis, xloc=xloc.bar_time, text=label_text, text_halign=text.align_right, text_valign=text.align_bottom, text_size=boxLabelSize, text_color=labelColor)
+        line.new(lt, mid, time, mid,
+                 color=gray,
+                 style=line.style_dashed,
+                 xloc=xloc.bar_time)
+
+// Optional OB‑level plots for alerts/debug:
+plot(bull_ob, 'Bull OB', color.new(green,0), 2, plot.style_stepline, offset=-length, display=display.none)
+plot(bear_ob, 'Bear OB', color.new(red,  0), 2, plot.style_stepline, offset=-length, display=display.none)
