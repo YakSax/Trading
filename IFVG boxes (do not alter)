@@ -1,0 +1,252 @@
+
+// THIS IS THE PRESERVED VERSION OF THE IFVG. DO NOT ALTER
+
+// This work is licensed under a Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) https://creativecommons.org/licenses/by-nc-sa/4.0/
+// ©Sax
+
+//@version=5
+indicator("Inversion Fair Value Gaps (IFVG) v2", shorttitle = "IFVG v2", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+//---------------------------------------------------------------------------------------------------------------------}
+//Settings
+//---------------------------------------------------------------------------------------------------------------------{
+show_ifvg = input.bool(true,title = "Show IFVG Boxes",group = 'IFVG settings')
+
+disp_num = input.int(2, maxval = 100, minval = 1, title = "Number of IFVGs to show", group = 'IFVG settings', tooltip = "Specifies the amount of most recent inversion FVG to display in Bullish/Bearish pairs, starting at the current and looking back.")
+signal_pref = input.string("Close", title = "Signal Preference", options = ["Close","Wick"], group = 'IFVG settings', tooltip = "Choose to send signals based on Wicks or Close Price.")
+wt = signal_pref == "Wick"
+atr_multi = input.float(0.25, step = 0.25,minval = 0,  title = "ATR Multiplier", group = 'IFVG settings', tooltip = "Filters FVGs based on ATR Width, Only displays Inversions that are Greater-Than the ATR*Multiplier.")
+buffer = input.int(100, "Max number of FVGs stored in memory", group = 'IFVG settings', minval = 1)
+// buffer: if the array reaches the buffer limit (e.g., 25 entries), the script removes the oldest entry using .shift() to prevent memory bloat and Keep only recent/potentially relevant gaps.
+
+//Colors
+green = input.color(color.new(#089981,75), title = "Bull Color", group = "FVG, IFVG, Order Block Box Settings")
+red = input.color(color.new(#f23645, 75), title = "Bear Color", group = "FVG, IFVG, Order Block Box Settings")
+gray = input.color(#787b86, title = "Midline Color", group = "FVG, IFVG, Order Block Box Settings")
+FVG_IFVG_label_color = input.color(color.rgb(186, 188, 196, 50), title = "Box Labels", group = "FVG, IFVG, Order Block Box Settings")
+box_label_size_input = input.string('Small', title = 'Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="FVG, IFVG, Order Block Box Settings")
+invis = color.new(#9b9c9b, 90)
+// // Function to convert user selection into size.____
+GetBoxLabelSize(BoxLabelSize) =>
+    BoxLabelSize == 'Tiny' ? size.tiny : BoxLabelSize == 'Small' ? size.small : BoxLabelSize == 'Normal' ? size.normal : size.small  // Default
+// Convert size settings string into actual size.____ 
+BoxLabelSize   = GetBoxLabelSize(box_label_size_input)
+
+
+
+//------ Box Labels ----------
+var string _ifvgLabel = "IFVG"
+var string _plus     = "+"
+var string _minus    = "-"
+var string _empty    = ""
+
+
+//---------------------------------------------------------------------------------------------------------------------}
+//UDT's   User-Defined Types, containers that structure complex data, keeping it clean and manageable in arrays
+//---------------------------------------------------------------------------------------------------------------------{
+type lab //Contains Necessary Label Data to Send to Label Function. Store a label’s bar timestamp (x), price level (y), and direction (dir)
+    int x
+    float y
+    int dir  // dir = 1 = bullish triangle label ("▲"), -1 = bearish triangle label ("▼"). (1 = bullish, -1 = bearish).
+
+type fvg //Contains Necessary FVG Data to Send to Chart.
+    int left = na     // timestamps for box edges.
+    float top = na    // vertical bound
+    int right = na   // timestamps for box edges.
+    float bot = na   // vertical bounds.
+    float mid = na   // midpoint of gap (for drawing a midline).
+    int dir = na      // original direction (1 = bullish, -1 = bearish).
+    int state = na   // 0 = regular FVG.  1 = inversion detected, now an IFVG.
+    array<lab> labs = na    // stores label(s) to draw when mitigation happens.
+    int x_val = na    // the time the mitigation (flip) was first detected.
+    box b1     // box before inversion
+    box b2     // box after inversion
+// You may also want to store line or label IDs similarly if you use those.
+
+//---------------------------------------------------------------------------------------------------------------------}
+//Functions
+//---------------------------------------------------------------------------------------------------------------------{
+//Basic Calcs
+// buffer = 100 //How many FVGs to keep in memory.
+c_top = math.max(open,close)
+c_bot = math.min(open,close)
+
+label_maker(_x,_y,_dir) => //Used for making Labels     // Creates directional labels (▲, ▼) at the IFVG edge when a mitigation is confirmed.
+    // _x: bar timestamp. _y: price coordinate. _dir: 1 = bull, -1 = bear. Invisible background to keep the chart clean.
+    switch
+        _dir == 1 => label.new(_x,_y,"\n▲", style = label.style_text_outline, color = invis,  textcolor = color.new(green,0), size = size.small, xloc = xloc.bar_time)
+        _dir == -1 => label.new(_x,_y, "▼\n", style = label.style_text_outline, color = invis,  textcolor = color.new(red,0), size = size.small, xloc = xloc.bar_time)
+
+fvg_manage(_ary,_inv_ary) => //First step filtering of FVG data, Not all FVGs will be displayed, only inversions. Scans regular FVGs for signs of inversion. Moves them from _ary to _inv_ary if a mitigation occurs.
+    if _ary.size() >= buffer    // Handles memory cleanup:  Prevents memory overflow by limiting to buffer entries.
+        _ary.shift()
+
+    if _ary.size() > 0
+        for i = _ary.size()-1 to 0
+            value = _ary.get(i)
+            _dir = value.dir
+
+            if _dir == 1 and (c_bot < value.bot)      // If a bullish FVG is breached below its bottom (bot), it's mitigated → push to inv_ary.
+                value.x_val := time
+                _inv_ary.push(_ary.remove(i))
+            if _dir == -1 and (c_top > value.top)    // If a bearish FVG is breached above its top (top), it's mitigated → becomes a bullish IFVG.
+                value.x_val := time
+                _inv_ary.push(_ary.remove(i))
+            
+
+inv_manage(_ary) => //All inversions will be displayed.  This function does the heavy lifting for confirmed inversion FVGs (IFVGs):
+    fire = false
+    if _ary.size() >= buffer   // maximum number of Fair Value Gaps (FVGs) the script will store in its internal array before it starts removing the oldest ones
+        _ary.shift()
+    if _ary.size() > 0
+        for i = _ary.size()-1 to 0
+            value = _ary.get(i)
+            bx_top = value.top
+            bx_bot = value.bot
+            _dir = value.dir
+            st = value.state
+
+            if (st == 0 and _dir == 1)   // Flips direction and sets state:  This makes bullish → bearish (and vice versa).
+                value.state := 1
+                value.dir := -1
+            if (_dir == -1 and st == 0)
+                value.state := 1
+                value.dir := 1
+            if st >= 1
+                value.right := time    // Updates right edge of box:
+
+            // // Triggers label creation (signal) when specific conditions are met. For bearish IFVG (was bull, now bear): 
+            // The close must break the box (i.e., mitigation confirmed). The prior bar's low (depending on wt) must touch but not exceed the edge.
+            if (_dir == -1 and st == 1 and close < bx_bot and (wt?high:close[1]) >= bx_bot and (wt?high:close[1]) < bx_top) 
+                value.labs.push(lab.new(time,bx_top,-1))
+                fire := true
+
+            // For bullish IFVG (was bear, now bull): The close must break the box (i.e., mitigation confirmed).
+            // The close must break the box (i.e., mitigation confirmed). The prior bar's high (depending on wt) must touch but not exceed the edge.
+            if (_dir == 1 and st == 1 and close > bx_top and (wt?low:close[1]) <= bx_top and (wt?low:close[1]) > bx_bot)
+                value.labs.push(lab.new(time,bx_bot,1))
+                fire := true
+
+            // removes dead IFVGs if price completely breaches the other side:
+            if st >= 1 and ((_dir == -1 and c_top > bx_top) or (_dir == 1 and c_bot < bx_bot))
+                if not na(value.b1)
+                    box.delete(value.b1)
+                if not na(value.b2)
+                    box.delete(value.b2)
+                _ary.remove(i)
+            // if st >= 1 and ((_dir == -1 and c_top > bx_top) or (_dir == 1 and c_bot < bx_bot))
+            //     _ary.remove(i)
+            
+    fire    // fire is the boolean signal for an alert
+
+send_it(_ary) => // Draws Everything on the Chart. This function draws the boxes, lines, and labels Original FVG box and Inversion-colored box (after mitigation).
+    last_index = _ary.size()-1
+    for [index,value] in _ary
+        bx_top = value.top
+        bx_bot = value.bot
+        bx_left = value.left
+        xval = value.x_val
+        mid = value.mid
+        col = value.dir == -1 ? green : red
+        o_col = value.dir == -1 ? red : green
+
+        if index > last_index - disp_num
+            if na(value.b1)
+                value.b1 := box.new(bx_left, bx_top, xval, bx_bot, bgcolor=col, border_color=invis, xloc=xloc.bar_time)
+            else
+                box.set_lefttop(value.b1, bx_left, bx_top)
+                box.set_rightbottom(value.b1, xval, bx_bot)
+
+            // POST-INVERSION BOX:
+            // text is only shown on the “live” IFVG box, and reflects direction:
+            label_text = value.dir == 1 ? _ifvgLabel + _plus : _ifvgLabel + _minus
+
+            if na(value.b2)
+                value.b2 := box.new(left= xval,top= bx_top,right= time,bottom= bx_bot,bgcolor= o_col,border_color = invis,xloc= xloc.bar_time,text= label_text,text_halign = text.align_right,text_valign = text.align_bottom,text_size = BoxLabelSize,text_color  = FVG_IFVG_label_color)
+            else
+                box.set_lefttop   (value.b2, xval,    bx_top)
+                box.set_rightbottom(value.b2, time,   bx_bot)
+                box.set_text      (value.b2, label_text)
+        
+            // box.new(bx_left,bx_top,xval,bx_bot,bgcolor = col, border_color = invis, xloc = xloc.bar_time)   // Original fvg box until inversion time
+            // box.new(xval,bx_top,time,bx_bot, bgcolor = o_col, border_color = invis, xloc = xloc.bar_time)   // Box after inversion time (flipped color):
+
+            // // draws a duplicate version of the inversion box and its midline, extending forward the IFVG box from the current bar
+            line.new(bx_left,mid,time,mid, color = gray, style = line.style_dashed, xloc = xloc.bar_time)   // Dashed midline over total IFVG lifespan:
+            // box.new(bar_index,bx_top,bar_index+2,bx_bot, bgcolor = o_col, border_color = invis)  // Future projection (2 bars)
+            // line.new(bar_index,mid,bar_index+2,mid, color = gray, style = line.style_dashed)    // Future projection (2 bars)
+
+    // _bullboxOB = box.new(left=bar_index - 2, top=high[2], right=bar_index, bottom=math.min(low[2], low[1]), border_color=color.new(obBullColor, obBorderTransparency), border_style=obBoxBorder, border_width=1, bgcolor=obBullColor, 
+    //  text=plotLabelOB ? _obLabel  + _plus : _empty, text_halign=text.align_right, text_valign=text.align_bottom, text_size=obLabelSize, text_color=obLabelColor)
+
+
+//---------------------------------------------------------------------------------------------------------------------}
+//Data Arrays: Tracks both normal FVGs and inversion FVGs. Separated by direction.
+//---------------------------------------------------------------------------------------------------------------------{
+var bull_fvg_ary = array.new<fvg>(na) // FVG Data, Not all will be Drawn
+var bear_fvg_ary = array.new<fvg>(na)
+
+var bull_inv_ary = array.new<fvg>(na) // Inversion Data, All will be Drawn
+var bear_inv_ary = array.new<fvg>(na)
+
+//---------------------------------------------------------------------------------------------------------------------}
+//PART 1 of Data Journey: FVG Detection Logic: This is the first step of the data journey. Checks whether a new FVG exists based on recent candles.
+// If wide enough (exceeds ATR threshold) it gets stored in an arrays. These arrays accumulate raw FVGs
+//---------------------------------------------------------------------------------------------------------------------{
+atr = nz(ta.atr(200)*atr_multi, ta.cum(high - low) / (bar_index+1))
+// This is the fundamental code for an FVG
+fvg_up = (low > high[2]) and (close[1] > high[2])    // A bullish FVG occurs when the current low is above the high from 2 bars ago, and the previous close confirms the break.
+fvg_down = (high < low[2]) and (close[1] < low[2])   // A bearish FVG occurs when the current high is below the high from 2 bars ago, and the previous close confirms the break.
+
+if fvg_up and math.abs(low-high[2]) > atr    // Only wide gaps (above ATR * multiplier) are stored
+    array.push(bull_fvg_ary,fvg.new(time[1], low, time, high[2], math.avg(low,high[2]), 1, 0,array.new<lab>(na),na))
+
+if fvg_down and math.abs(low[2]-high) > atr   // Only wide gaps (above ATR * multiplier) are stored
+    array.push(bear_fvg_ary,fvg.new(time[1], low[2], time, high, math.avg(high,low[2]),-1 ,0,array.new<lab>(na),na))
+
+//---------------------------------------------------------------------------------------------------------------------}
+//PART 2 of Data Journey: Checks if any stored FVGs have been "mitigated" (i.e., invalidated by price revisiting the gap). Moves mitigated FVGs → IFVGs
+//  The FVG is removed from *_fvg_ary.   It is moved into *_inv_ary (the inversion array) for further processing.
+//---------------------------------------------------------------------------------------------------------------------{
+// FVG_Data -> Inversion_Data -> Chart
+fvg_manage(bull_fvg_ary,bull_inv_ary)
+fvg_manage(bear_fvg_ary,bear_inv_ary)
+
+bear_signal = inv_manage(bull_inv_ary)
+bull_signal = inv_manage(bear_inv_ary)
+
+if barstate.islast and show_ifvg
+    send_it(bull_inv_ary)
+    send_it(bear_inv_ary)
+
+//Alert Options
+alertcondition(bull_signal, "Bullish Signal")   //Alerts fire only when an IFVG is validated.
+alertcondition(bear_signal, "Bearish Signal")   //Alerts fire only when an IFVG is validated.
+
+//---------------------------------------------------------------------------------------------------------------------}
+
+// NOTES:
+// Explainer of FVG and IFVG Box boundaries
+// 1. Original FVG box boundaries
+// Stored on the fvg struct as:
+// left → value.left — the bar–time when the gap was first detected (in the fvg.new(...) call this is time[1]).    the send_it() function uses bx_left  = value.left   to draw it
+// top → value.top — the upper price bound of the gap (for a bullish FVG this is high[2]; for bearish it’s high).
+// bottom → value.bot — the lower price bound of the gap (for bullish it’s low; for bearish it’s low[2]).
+// right → value.right — the bar–time when the gap “ended” (in fvg.new(...) this is time).  the send_it() function uses   xval  = value.x_val    // set at inversion time so that the “pre-inversion” box is trimmed to end exactly at the inversion time (x_val), once it’s been detected.
+
+// 2. IFVG (post-inversion) box boundaries
+// Once an inversion is detected, the struct’s x_val field is set to the timestamp of that bar (value.x_val := time), and on each subsequent bar the script draws the IFVG box as:
+// left → value.x_val — the bar–time when the FVG was mitigated (and flipped)
+// top → value.top — identical to the original FVG’s top
+// bottom → value.bot — identical to the original FVG’s bottom
+// right → time — the current bar’s time, so the IFVG box extends forward from the flip
+// inv_manage() doesn’t just return a value — it updates fields inside the objects in the array, creates new labels (lab.new), and removes entries.
+// So even though the fire result is captured in a variable (bear_signal or bull_signal), all the side effects still happen:
+// Boxes are updated (value.right := time)
+// Direction and state change (value.dir := ...)
+// Labels are created and pushed (value.labs.push(...))
+// IFVGs are deleted (_ary.remove(i))
+
+// =======================================================================================================================================================
+// =======================================================================================================================================================
+// =======================================================================================================================================================
+// =======================================================================================================================================================
