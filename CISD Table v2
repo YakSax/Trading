@@ -1,0 +1,406 @@
+
+
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// @Sax
+
+// Adapted from Change in the State of Delivery (CISD) [LuxAlgo] by LuxAlgo.
+// Modified original code to simultaneously paint both "Classic" and "Liquidity Sweep"-syle CISDs (both are necessary to properly capture CISDs on chart)
+// Status of CISD from multiple time frames are delivered into a convenient table
+
+
+//@version=5
+indicator('CISD Table v2 (Change in State of Delivery)', shorttitle='CISD Table v2', max_labels_count=500, max_lines_count=500, overlay=true)
+
+// ---------------------------------------------------------------------------------------------------------------------
+// INPUTS
+// ---------------------------------------------------------------------------------------------------------------------
+Tracking_Method         = input.string('Classic', 'Detection Method', options=['Classic', 'Liquidity Sweep'])
+// Classic settings
+classic_min_seq         = input.int(3, "Classic Minimum CISD Duration", minval=0, group='Classic Settings')
+classic_max_valid       = input.int(10, "Classic Maximum Swing Validity", minval=1, group='Classic Settings')
+// Sweep settings
+sweep_swing_len         = input.int(3, "Sweep Swing Length", minval=1, group='Sweep Settings', tooltip ='Only applicable on the Liquidity Sweep Detection Method')
+sweep_min_seq           = input.int(4, "Sweep Minimum CISD Duration", minval=0, group='Sweep Settings')
+sweep_max_valid         = input.int(13, "Sweep Maximum Swing Validity", minval=1, group='Sweep Settings', tooltip ='Maximum allowed swing level duration without a new detected sweep')
+
+// Style
+textSizeInput           = str.lower(input.string('Small', 'Label/Text Size', options=['Tiny','Small','Normal'], group='Style'))
+cBull                   = input.color(#089981, 'Bullish', group='Style')
+cBear                   = input.color(#f23655, 'Bearish', group='Style')
+cSweepH                 = input.color(#787b8631, 'Sweeps' + '                       ', group='Style', inline="S")
+cSweepL                 = input.color(#787b8631, '', group='Style', inline="S", tooltip='Sweep High/Low')
+confirm_on_close        = input.bool(true, 'Only confirm CISD on candle close', group='Style')
+
+// Table inputs (from example)
+showCISDTable           = input.bool(true, "Show CISD Table", group="Indicator Table")
+tableSizeInput          = input.string("Small", "Table Size", options=["Small","Medium","Large"], group="Indicator Table")
+tablePosInput           = input.string("Bottom Right", "Table Position", 
+                          options=["Top Left","Top Right","Bottom Left","Bottom Right"], group="Indicator Table")
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TYPES / GLOBALS
+// ---------------------------------------------------------------------------------------------------------------------
+type bin 
+    line ln 
+    bool active 
+    chart.point cp1
+    chart.point cp2
+    bool broken = false
+
+type swing 
+    chart.point cp
+    line        ln
+    line       wick
+    bool active = false
+
+n     = bar_index
+bull  = close > open 
+bear  = close < open  
+sweep = Tracking_Method == "Liquidity Sweep"
+var int trend = 0
+
+// pivots (for drawing scope)
+ph = ta.pivothigh(sweep_swing_len, 1)
+pl = ta.pivotlow(sweep_swing_len, 1)
+
+// ----------------------------------------------------------------------------
+// PURE CISD LOGIC: returns -1, 0, or 1. MUST NOT create drawings.
+// ----------------------------------------------------------------------------
+f_calcCISD() =>
+    // local pivots in the function (inner timeframe pivots)
+    ph_loc = ta.pivothigh(sweep_swing_len, 1)
+    pl_loc = ta.pivotlow(sweep_swing_len, 1)
+
+    // local static variables
+    var int    trend_loc          = 0
+    var chart.point cp_lastPh_loc = chart.point.from_index(bar_index, high)
+    var chart.point cp_lastPl_loc = chart.point.from_index(bar_index, low)
+    var chart.point trackPB_loc   = chart.point.from_index(na, na) // track Price Bull (price when bull reversal candle formed)
+    var chart.point trackPR_loc   = chart.point.from_index(na, na) // track Price Bear (price when bear reversal candle formed)
+
+    // Update local pivots when formed (pivot value is at bar_index-1)
+    if not na(ph_loc)
+        cp_lastPh_loc := chart.point.from_index(bar_index - 1, ph_loc)
+    if not na(pl_loc)
+        cp_lastPl_loc := chart.point.from_index(bar_index - 1, pl_loc)
+
+    // Track reversal price (mirror your original rule)
+    if close > open and open < open[1]
+        trackPB_loc := chart.point.from_index(bar_index, open)
+    if close < open and open > open[1]
+        trackPR_loc := chart.point.from_index(bar_index, open)
+
+    // Reset pivot-tracking if price moves beyond them
+    if not na(cp_lastPh_loc.price) and close > cp_lastPh_loc.price
+        cp_lastPh_loc := chart.point.from_index(na, na)
+    if not na(cp_lastPl_loc.price) and close < cp_lastPl_loc.price
+        cp_lastPl_loc := chart.point.from_index(na, na)
+
+    // Classic detection logic (pure):
+    if Tracking_Method == "Classic"
+        // Bearish CISD (start on bull->bear flip then price closes below the tracked reversal price)
+        if not na(trackPB_loc.price)
+            bars_since = bar_index - trackPB_loc.index
+            if close < trackPB_loc.price and bars_since >= classic_min_seq and bars_since <= classic_max_valid
+                trend_loc := -1
+
+        // Bullish CISD
+        if not na(trackPR_loc.price)
+            bars_since2 = bar_index - trackPR_loc.index
+            if close > trackPR_loc.price and bars_since2 >= classic_min_seq and bars_since2 <= classic_max_valid
+                trend_loc := 1
+
+    // Liquidity Sweep detection (pure):
+    else
+        // For sweep-high (ph_loc is pivot high at bar_index-1) → bearish CISD when price closes below pivot high
+        if not na(cp_lastPh_loc.price)
+            bars_since_ph = bar_index - cp_lastPh_loc.index
+            if close < cp_lastPh_loc.price and bars_since_ph >= sweep_min_seq and bars_since_ph <= sweep_max_valid
+                trend_loc := -1
+
+        // For sweep-low → bullish CISD when price closes above pivot low
+        if not na(cp_lastPl_loc.price)
+            bars_since_pl = bar_index - cp_lastPl_loc.index
+            if close > cp_lastPl_loc.price and bars_since_pl >= sweep_min_seq and bars_since_pl <= sweep_max_valid
+                trend_loc := 1
+
+    nz(trend_loc, 0)
+
+// ----------------------------------------------------------------------------
+// Wrap integer direction into icon + background
+// ----------------------------------------------------------------------------
+f_getLastCISD(_dir) =>
+    int cisdDir = nz(_dir, 0)
+    bool cisdBull = cisdDir == 1
+    bool cisdBear = cisdDir == -1
+    string iconCISD = cisdBull ? "▲" : cisdBear ? "▼" : "--"
+    color bgCISD   = cisdBull ? color.new(cBull, 0) : cisdBear ? color.new(cBear, 0) : color.gray
+    [iconCISD, bgCISD]
+
+// ---------------------------------------------------------------------------------------------------------------------
+// DRAWING LOGIC FOR CURRENT TF (lines + labels + bins) — largely preserved from original script
+// ---------------------------------------------------------------------------------------------------------------------
+var array<swing> swingsH = array.new<swing>()
+var array<swing> swingsL = array.new<swing>()
+var chart.point cp_lastPh = chart.point.from_index(n, high)
+var chart.point cp_lastPl = chart.point.from_index(n, low)
+var chart.point trackPriceBull = chart.point.from_index(na, na)
+var chart.point trackPriceBear = chart.point.from_index(na, na)
+
+var array<bin> arrBull = array.new<bin>()
+var array<bin> arrBear = array.new<bin>()
+
+var bin oBull = bin.new(line.new(n, open, n, open, color=color.new(cBull,40)), true, chart.point.from_index(n, high), chart.point.from_index(n, high))
+var bin oBear = bin.new(line.new(n, open, n, open, color=color.new(cBear,40)), true, chart.point.from_index(n, low), chart.point.from_index(n, low))
+
+// Whenever ph/pl form (using sweep_swing_len as pivot length for both modes — matches your original)
+if not na(ph)
+    array.push(swingsH, swing.new(chart.point.from_index(n-1, ph)))
+    cp_lastPh := chart.point.from_index(n-1, ph)
+if not na(pl)
+    array.push(swingsL, swing.new(chart.point.from_index(n-1, pl)))
+    cp_lastPl := chart.point.from_index(n-1, pl)
+
+// Track reversal price (same rule)
+if bull and bear[1]
+    trackPriceBull := chart.point.from_index(n, open)
+if bear and bull[1]
+    trackPriceBear := chart.point.from_index(n, open)
+
+// Reset if pivot is broken
+if not na(cp_lastPh.price) and close > cp_lastPh.price
+    cp_lastPh := chart.point.from_index(na, na)
+if not na(cp_lastPl.price) and close < cp_lastPl.price
+    cp_lastPl := chart.point.from_index(na, na)
+
+// Classic drawing
+if Tracking_Method == "Classic"
+    // Bearish start (classic): bull->bear flip
+    if barstate.isconfirmed and bull and bear[1]
+        if oBull.active and not oBull.broken
+            oBull.ln.delete()
+        oBull.active := true
+        oBull.ln     := line.new(trackPriceBull.index, trackPriceBull.price, n, trackPriceBull.price, color=color.new(cBull,40))
+        oBull.cp1    := chart.point.from_index(cp_lastPh.index, cp_lastPh.price)
+        oBull.cp2    := chart.point.from_index(n, cp_lastPh.price)
+        oBull.broken := false
+
+    // Bullish start (classic): bear->bull flip
+    if barstate.isconfirmed and bear and bull[1]
+        if oBear.active and not oBear.broken
+            oBear.ln.delete()
+        oBear.active := true
+        oBear.ln     := line.new(trackPriceBear.index, trackPriceBear.price, n, trackPriceBear.price, color=color.new(cBear,40))
+        oBear.cp1    := chart.point.from_index(cp_lastPl.index, cp_lastPl.price)
+        oBear.cp2    := chart.point.from_index(n, cp_lastPl.price)
+        oBear.broken := false
+
+    // Check active Bull CISD (classic)
+    if oBull.active
+        x1 = oBull.ln.get_x1()
+        if n - x1 <= classic_max_valid
+            oBull.ln.set_x2(n)
+            if close < oBull.ln.get_y2()
+                if n - x1 >= classic_min_seq
+                    oBull.ln.set_color(cBear)
+                    if trend == -1
+                        oBull.ln.set_style(line.style_dashed)
+                    oBull.active := false
+                    oBull.broken := true
+                    trend := -1
+                    xm = math.ceil(math.avg(x1, n))
+                    if not confirm_on_close or barstate.isconfirmed
+                        label.new(xm, oBull.ln.get_y2(), style=label.style_label_up, textcolor=cBear, text='CISD', size=textSizeInput, color=color.new(color.white, 100))
+                else
+                    oBull.active := false
+                    oBull.ln.delete()
+        else
+            oBull.active := false
+            oBull.ln.delete()
+
+    // Check active Bear CISD (classic)
+    if oBear.active
+        x1 = oBear.ln.get_x1()
+        if n - x1 <= classic_max_valid
+            oBear.ln.set_x2(n)
+            if close > oBear.ln.get_y2()
+                if n - x1 >= classic_min_seq
+                    oBear.ln.set_color(cBull)
+                    if trend == 1
+                        oBear.ln.set_style(line.style_dashed)
+                    oBear.active := false
+                    oBear.broken := true
+                    trend := 1
+                    xm = math.ceil(math.avg(x1, n))
+                    if not confirm_on_close or barstate.isconfirmed
+                        label.new(xm, oBear.ln.get_y2(), style=label.style_label_down, textcolor=cBull, text='CISD', size=textSizeInput, color=color.new(color.white, 100))
+                else
+                    oBear.active := false
+                    oBear.ln.delete()
+        else
+            oBear.active := false
+            oBear.ln.delete()
+
+// Sweep drawing
+else
+    // Process swingsH (bearish CISD candidates)
+    if array.size(swingsH) > 0
+        max_bars_back(close, 1000)
+        for i = array.size(swingsH) - 1 to 0
+            get = array.get(swingsH, i)
+            x = get.cp.index
+            y = get.cp.price
+            if n - x > sweep_max_valid
+                array.remove(swingsH, i)
+            else
+                if not na(get.ln)
+                    if close > get.ln.get_y2()
+                        array.remove(swingsH, i)
+                else
+                    if close > y
+                        array.remove(swingsH, i)
+                    else
+                        if not get.active and high > get.cp.price and close < get.cp.price
+                            get.ln    := line.new(x, get.cp.price, n, get.cp.price, color=cSweepH)
+                            get.wick  := line.new(n, get.cp.price, n, high, color=cSweepH, width=3)
+                            get.active := true
+                            // check "valid"
+                            good = true
+                            for j = 0 to n - trackPriceBull.index
+                                if close[j] < trackPriceBull.price
+                                    good := false
+                                    break
+                            if good
+                                array.push(arrBull, bin.new(line.new(trackPriceBull.index, trackPriceBull.price, n, trackPriceBull.price, color=color.new(cBull,40)), true, chart.point.from_index(cp_lastPh.index, cp_lastPh.price), chart.point.from_index(n, cp_lastPh.price)))
+
+    // Process swingsL (bullish CISD candidates)
+    if array.size(swingsL) > 0
+        max_bars_back(close, 1000)
+        for i = array.size(swingsL) - 1 to 0
+            get = array.get(swingsL, i)
+            x = get.cp.index
+            y = get.cp.price
+            if n - x > sweep_max_valid
+                array.remove(swingsL, i)
+            else
+                if not na(get.ln)
+                    if close < get.ln.get_y2()
+                        array.remove(swingsL, i)
+                else
+                    if close < y
+                        array.remove(swingsL, i)
+                    else
+                        if not get.active and low < get.cp.price and close > get.cp.price
+                            get.ln    := line.new(x, get.cp.price, n, get.cp.price, color=cSweepL)
+                            get.wick  := line.new(n, get.cp.price, n, low, color=cSweepL, width=3)
+                            get.active := true
+                            good = true
+                            for j = 0 to n - trackPriceBear.index
+                                if close[j] > trackPriceBear.price
+                                    good := false
+                                    break
+                            if good
+                                array.push(arrBear, bin.new(line.new(trackPriceBear.index, trackPriceBear.price, n, trackPriceBear.price, color=color.new(cBear,40)), true, chart.point.from_index(cp_lastPl.index, cp_lastPl.price), chart.point.from_index(n, cp_lastPl.price)))
+
+    // Resolve arrBull → bearish CISD
+    if array.size(arrBull) > 0
+        for i = array.size(arrBull) - 1 to 0
+            get = array.get(arrBull, i)
+            get.ln.set_x2(n)
+            x1 = get.ln.get_x1()
+            if n - x1 > sweep_max_valid
+                get.ln.delete()
+                array.remove(arrBull, i)
+            else
+                if close < get.ln.get_y2()
+                    if n - x1 >= sweep_min_seq
+                        get.ln.set_color(cBear)
+                        if trend == -1
+                            get.ln.set_style(line.style_dashed)
+                        trend := -1
+                        midX = math.ceil(math.avg(x1, n))
+                        if not confirm_on_close or barstate.isconfirmed
+                            label.new(midX, get.ln.get_y2(), style=label.style_label_up, textcolor=cBear, text='CISD', size=textSizeInput, color=color.new(color.white, 100))
+                            label.new(n, high, style=label.style_label_down, textcolor=cBear, text='▼', size=textSizeInput, color=color.new(color.white, 100))
+                    else
+                        get.ln.delete()
+                    array.remove(arrBull, i)
+
+    // Resolve arrBear → bullish CISD
+    if array.size(arrBear) > 0
+        for i = array.size(arrBear) - 1 to 0
+            get = array.get(arrBear, i)
+            get.ln.set_x2(n)
+            x1 = get.ln.get_x1()
+            if n - x1 > sweep_max_valid
+                get.ln.delete()
+                array.remove(arrBear, i)
+            else
+                if close > get.ln.get_y2()
+                    if n - x1 >= sweep_min_seq
+                        get.ln.set_color(cBull)
+                        if trend == 1
+                            get.ln.set_style(line.style_dashed)
+                        trend := 1
+                        midX = math.ceil(math.avg(x1, n))
+                        if not confirm_on_close or barstate.isconfirmed
+                            label.new(midX, get.ln.get_y2(), style=label.style_label_down, textcolor=cBull, text='CISD', size=textSizeInput, color=color.new(color.white, 100))
+                            label.new(n, low, style=label.style_label_up, textcolor=cBull, text='▲', size=textSizeInput, color=color.new(color.white, 100))
+                    else
+                        get.ln.delete()
+                    array.remove(arrBear, i)
+
+// ---------------------------------------------------------------------------------------------------------------------
+// MULTI-TIMEFRAME: call f_calcCISD() under request.security for multiple timeframes
+// ---------------------------------------------------------------------------------------------------------------------
+dir5   = request.security(syminfo.tickerid, "5",   f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+dir10  = request.security(syminfo.tickerid, "10",  f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+dir15  = request.security(syminfo.tickerid, "15",  f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+dir30  = request.security(syminfo.tickerid, "30",  f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+dir60  = request.security(syminfo.tickerid, "60",  f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+dir240 = request.security(syminfo.tickerid, "240", f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+dirD   = request.security(syminfo.tickerid, "D",   f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+dirW   = request.security(syminfo.tickerid, "W",   f_calcCISD(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+// Wrap each integer direction into icon + bg color:
+[icon5,  bg5]  = f_getLastCISD(dir5)
+[icon10, bg10] = f_getLastCISD(dir10)
+[icon15, bg15] = f_getLastCISD(dir15)
+[icon30, bg30] = f_getLastCISD(dir30)
+[icon60, bg60] = f_getLastCISD(dir60)
+[icon240,bg240]= f_getLastCISD(dir240)
+[iconD,  bgD]  = f_getLastCISD(dirD)
+[iconW,  bgW]  = f_getLastCISD(dirW)
+
+// ---------------------------------------------------------------------------------------------------------------------
+// TABLE DISPLAY (as example script does)
+// ---------------------------------------------------------------------------------------------------------------------
+var table tbl = table.new(position = tablePosInput == "Top Left" ? position.top_left : tablePosInput == "Top Right" ? position.top_right : tablePosInput == "Bottom Left" ? position.bottom_left : position.bottom_right, columns=2, rows=8, bgcolor=color.gray)
+
+if barstate.islast and showCISDTable
+    txtSize = tableSizeInput == "Small"  ? size.tiny : tableSizeInput == "Medium" ? size.small : size.normal
+    hdrBg = color.rgb(200, 200, 200)
+    // 5m
+    table.cell(tbl, 0, 0, "CISD 5m", text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 0, icon5,     text_color=color.black, bgcolor=bg5,    text_size=txtSize)
+    // 10m
+    table.cell(tbl, 0, 1, "CISD 10m", text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 1, icon10,     text_color=color.black, bgcolor=bg10,    text_size=txtSize)
+    // 15m
+    table.cell(tbl, 0, 2, "CISD 15m", text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 2, icon15,     text_color=color.black, bgcolor=bg15,    text_size=txtSize)
+    // 30m
+    table.cell(tbl, 0, 3, "CISD 30m", text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 3, icon30,     text_color=color.black, bgcolor=bg30,    text_size=txtSize)
+    // 1h
+    table.cell(tbl, 0, 4, "CISD 1h",  text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 4, icon60,     text_color=color.black, bgcolor=bg60,    text_size=txtSize)
+    // 4h
+    table.cell(tbl, 0, 5, "CISD 4h",  text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 5, icon240,    text_color=color.black, bgcolor=bg240,   text_size=txtSize)
+    // Daily
+    table.cell(tbl, 0, 6, "CISD D",   text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 6, iconD,      text_color=color.black, bgcolor=bgD,     text_size=txtSize)
+    // Weekly
+    table.cell(tbl, 0, 7, "CISD W",   text_color=color.black, bgcolor=hdrBg, text_size=txtSize)
+    table.cell(tbl, 1, 7, iconW,      text_color=color.black, bgcolor=bgW,     text_size=txtSize)
