@@ -1,0 +1,404 @@
+
+// @VentureTrading
+//@version=6
+indicator("ICT Customizable 50% Line & Daily/Asia/London/New York High/Low + True Day Open", overlay = true)
+
+
+// ───── Checklist Display Control ─────
+group_display = "☑️ Checklist Visibility"
+showChecklist = input.bool(true, "Enable Confluence Checklist", group=group_display)
+checklistSizeOpt = input.string("Medium", "Checklist Display Size", options=["Small", "Medium", "Large"], group=group_display)
+checklistPosition = input.string("Top Right", "Checklist Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=group_display)
+
+// ───── Confluence Toggles ─────
+group_checklist = "🔍 Checklist Confluences"
+c1 = input.bool(false,  "Premium & Discount",         group=group_checklist)
+c2 = input.bool(false,  "Major Liq Sweep",            group=group_checklist)
+c3 = input.bool(false, "Good Reaction",              group=group_checklist)
+c4 = input.bool(false,  "Inside Killzone",            group=group_checklist)
+c5 = input.bool(false,  "Good Momentum",              group=group_checklist)
+c6 = input.bool(false,  "Clear DOL",                  group=group_checklist)
+c7 = input.bool(false, "SMT",                        group=group_checklist)
+c8 = input.bool(false, "Delivering from HTF Gap",    group=group_checklist)
+
+// Custom label anchoring logic to avoid overlap (not from built-in tools)
+var float[] labeledHighs       = array.new_float()
+var float[] labeledLows        = array.new_float()
+var label[] labeledHighHandles = array.new<label>()
+var label[] labeledLowHandles  = array.new<label>()
+
+getIndexOf(arr, val) =>
+    var int index = -1
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            if array.get(arr, i) == val
+                index := i
+    index
+
+
+
+//────────────────────── INPUTS ──────────────────────
+group_50 = "50% Line Settings"
+color lineColor = input.color(color.rgb(206, 233, 255), "50% Line Color", group=group_50)
+int lineWidth = input.int(1, "50% Line Width", minval=1, maxval=5, group=group_50)
+bool dottedLine = input.bool(true, "Dotted Line", group=group_50)
+int opacity50 = input.int(50, "50% Line Opacity (0-100)", minval=0, maxval=100, group=group_50)
+
+group_50_label = "50% Line Label Settings"
+bool show50Text = input.bool(true, "Show 50% Line Text", group=group_50_label)
+string labelText50 = input.string("50% Level", "50% Line Text", group=group_50_label)
+color textColor50 = input.color(color.white, "50% Text Color", group=group_50_label)
+int textSize50 = input.int(10, "50% Text Size", minval=8, maxval=20, group=group_50_label)
+int textOpacity50 = input.int(100, "50% Text Opacity (0-100)", minval=0, maxval=100, group=group_50_label)
+string textPos50 = input.string("Middle", "50% Text Position", options=["Left", "Middle", "Right"], group=group_50_label)
+
+group_hl = "Daily High/Low Settings"
+bool showHighLow = input.bool(true, "Show High/Low Lines", group=group_hl)
+color highLowColor = input.color(color.red, "High/Low Line Color", group=group_hl)
+int highLowWidth = input.int(1, "High/Low Line Width", minval=1, maxval=5, group=group_hl)
+bool dottedHighLow = input.bool(true, "Dotted High/Low Lines", group=group_hl)
+bool showHLText = input.bool(true, "Show High/Low Text", group=group_hl)
+string highText = input.string("Daily High", "High Line Text", group=group_hl)
+string lowText = input.string("Daily Low", "Low Line Text", group=group_hl)
+color highLowTextColor = input.color(color.white, "High/Low Text Color", group=group_hl)
+int highLowTextSize = input.int(10, "High/Low Text Size", minval=8, maxval=20, group=group_hl)
+int highLowTextOpacity = input.int(100, "High/Low Text Opacity (0-100)", minval=0, maxval=100, group=group_hl)
+string highLowTextPos = input.string("Middle", "High/Low Text Position", options=["Left", "Middle", "Right"], group=group_hl)
+
+group_MO = "Market Open Settings"
+bool showMarketOpen = input.bool(true, "Show Market Open", group=group_MO)
+color MarketOpenLineColor = input.color(color.white, "Market Open Line Color", group=group_MO)
+int MarketOpenLineOpacity = input.int(70, "Market Open Line Opacity", minval=0, maxval=100, group=group_MO)
+int MarketOpenLineWidth = input.int(1, "Market Open Line Width", minval=1, maxval=5, group=group_MO)
+string MarketOpenText = input.string("Market Open", "Market Open Text", group=group_MO)
+color MarketOpenTextColor = input.color(color.white, "Market Open Text Color", group=group_MO)
+int MarketOpenTextSize = input.int(10, "Market Open Text Size", minval=8, maxval=20, group=group_MO)
+int MarketOpenTextOpacity = input.int(50, "Market Open Text Opacity (0-100)", minval=0, maxval=100, group=group_MO)
+string MarketOpenTextPos = input.string("Middle", "Market Open Text Position", options=["Top", "Middle", "Bottom"], group=group_MO)
+
+group_watermark = "Watermark Settings"
+bool enableWatermark = input.bool(true, "Enable Watermark", group=group_watermark)
+string watermarkText = input.string("Motivational Words", "Watermark Text", group=group_watermark)
+string watermarkText2 = input.string("Customize me!", "Second Watermark Text", group=group_watermark)
+color watermarkColor = input.color(color.new(color.white, 80), "Watermark Color", group=group_watermark)
+int watermarkSize = input.int(35, "Watermark Text Size", minval=8, maxval=40, group=group_watermark)
+int watermarkSize2 = input.int(20, "Second Watermark Text Size", minval=8, maxval=40, group=group_watermark)
+
+group_TDO = "True Day Open Line Settings"
+bool showTrueDayOpen = input.bool(true, "Show True Day Open", group=group_TDO)
+color TrueDayOpenColor = input.color(color.new(color.gray, 80), "True Day Open Line Color", group=group_TDO)
+int TrueDayOpenWidth = input.int(1, "True Day Open Line Width", minval=1, maxval=5, group=group_TDO)
+color TrueDayOpenTextColor = input.color(color.new(color.white, 80), "True Day Open Text Color", group=group_TDO)
+int TrueDayOpenTextSize = input.int(10, "True Day Open Text Size", minval=8, maxval=20, group=group_TDO)
+string TrueDayOpenTextPosition = input.string("Middle", "True Day Open Text Position", options=["Top", "Middle", "Bottom"], group=group_TDO)
+
+// ──────────────── SESSION LOGIC ────────────────
+const string ZONE = "America/Chicago"
+bool newSession = (hour(time, ZONE) >= 17 and hour(time[1], ZONE) < 17)
+
+var int startBar = na
+var float dayHigh = na
+var float dayLow = na
+
+if newSession
+    startBar := bar_index
+    dayHigh := high
+    dayLow := low
+else
+    dayHigh := math.max(nz(dayHigh, high), high)
+    dayLow := math.min(nz(dayLow, low), low)
+
+float midLevel = (dayHigh + dayLow) / 2
+int endBar = bar_index + 500
+
+// ──────────────── LABEL COORD HELPERS ────────────────
+calcLabelX(string pos) =>
+    pos == "Left" ? bar_index - 10 : pos == "Middle" ? bar_index + 150 : bar_index + 300
+
+calcLabelY(float base, string pos) =>
+    pos == "Top" ? base + 100 * syminfo.mintick : pos == "Bottom" ? base - 100 * syminfo.mintick : base
+
+// ──────────────── DELETE OLD LINES ────────────────
+var line line50 = na
+var line highLine = na
+var line lowLine = na
+var line MarketOpenLine = na
+var label label50 = na
+var label labelHigh = na
+var label labelLow = na
+var label MarketOpenLabel = na
+
+if not na(line50)
+    line.delete(line50)
+if not na(highLine)
+    line.delete(highLine)
+if not na(lowLine)
+    line.delete(lowLine)
+if not na(MarketOpenLine)
+    line.delete(MarketOpenLine)
+if not na(label50)
+    label.delete(label50)
+if not na(labelHigh)
+    label.delete(labelHigh)
+if not na(labelLow)
+    label.delete(labelLow)
+if not na(MarketOpenLabel)
+    label.delete(MarketOpenLabel)
+
+// 50% Line + Label
+line50 := line.new(startBar, midLevel, endBar, midLevel, color=color.new(lineColor, 100 - opacity50), width=lineWidth, style=dottedLine ? line.style_dotted : line.style_solid)
+if show50Text
+    label50 := label.new(calcLabelX(textPos50), midLevel, labelText50, textcolor=color.new(textColor50, 100 - textOpacity50), size=size.small, style=label.style_none)
+
+// Daily High / Low Lines + Labels
+if showHighLow
+    highLine := line.new(startBar, dayHigh, endBar, dayHigh, color=highLowColor, width=highLowWidth, style=dottedHighLow ? line.style_dotted : line.style_solid)
+    lowLine := line.new(startBar, dayLow, endBar, dayLow, color=highLowColor, width=highLowWidth, style=dottedHighLow ? line.style_dotted : line.style_solid)
+    if showHLText
+        labelHigh := label.new(calcLabelX(highLowTextPos), dayHigh, highText, textcolor=color.new(highLowTextColor, 100 - highLowTextOpacity), size=size.small, style=label.style_none)
+        labelLow := label.new(calcLabelX(highLowTextPos), dayLow, lowText, textcolor=color.new(highLowTextColor, 100 - highLowTextOpacity), size=size.small, style=label.style_none)
+
+// Market Open Line + Label
+if showMarketOpen
+    MarketOpenLine := line.new(startBar, dayHigh + 100 * syminfo.mintick, startBar, dayLow - 100 * syminfo.mintick, color=color.new(MarketOpenLineColor, 100 - MarketOpenLineOpacity), width=MarketOpenLineWidth, style=line.style_dotted)
+    MarketOpenLabel := label.new(startBar, calcLabelY(midLevel, MarketOpenTextPos), MarketOpenText, textcolor=color.new(MarketOpenTextColor, 100 - MarketOpenTextOpacity), size=size.small, style=label.style_none)
+
+// Watermark
+var table watermarkTable = table.new(position.top_center, 1, 2)
+if enableWatermark and barstate.islast
+    table.cell(watermarkTable, 0, 0, watermarkText, text_size=watermarkSize, text_color=watermarkColor)
+    table.cell(watermarkTable, 0, 1, watermarkText2, text_size=watermarkSize2, text_color=watermarkColor)
+
+// True Day Open (11 PM CST) NEEDS WORK (need horizontal line instead of vertical)
+int TrueDayOpenTime = timestamp(ZONE, year, month, dayofmonth, 23, 0)
+var line TrueDayOpenLine = na
+var label[] TrueDayOpenLabels = array.new<label>()
+if showTrueDayOpen and time >= TrueDayOpenTime
+    if not na(TrueDayOpenLine)
+        line.delete(TrueDayOpenLine)
+    for lbl in TrueDayOpenLabels
+        label.delete(lbl)
+    array.clear(TrueDayOpenLabels)
+    TrueDayOpenLine := line.new(x1=TrueDayOpenTime, y1=dayHigh + 450 * syminfo.mintick, x2=TrueDayOpenTime, y2=dayLow - 500 * syminfo.mintick, xloc=xloc.bar_time, color=TrueDayOpenColor, width=TrueDayOpenWidth, style=line.style_dotted)
+    float textYPosition = TrueDayOpenTextPosition == "Top" ? dayHigh + 200 * syminfo.mintick : TrueDayOpenTextPosition == "Bottom" ? dayLow - 200 * syminfo.mintick : midLevel
+    string verticalText = "True Day Open"
+    for i = 0 to str.length(verticalText) - 1
+        string char = str.substring(verticalText, i, i + 1)
+        label lb = label.new(x=TrueDayOpenTime, y=textYPosition - i * 4 * syminfo.mintick, text=char, xloc=xloc.bar_time, textcolor=TrueDayOpenTextColor, size=size.small, style=label.style_none)
+        array.push(TrueDayOpenLabels, lb)
+
+group_KZ = "Killzone High/Low Settings"
+
+// ── SESSION TOGGLES ──
+_ = input.string("", title="🔹 KILLZONE OPTIONS ↓", group=group_KZ)
+enableAsiaSession   = input.bool(true,  "Show Asia",                                    group=group_KZ)
+enableLondonSession = input.bool(true,  "Show London",                                  group=group_KZ)
+enableNYSession     = input.bool(true,  "Show Full NY Session (9:30–16:00)",            group=group_KZ)
+enableNYAM          = input.bool(true,  "Show NY AM Killzone (9:30–10:00)",             group=group_KZ)
+enableNYLunch       = input.bool(true,  "Show NY Lunch Killzone (11:30–13:00)",         group=group_KZ)
+enableNYPM          = input.bool(true,  "Show NY PM Killzone (13:30–15:00)",            group=group_KZ)
+
+// ── SESSION LINE SETTINGS ──
+_ = input.string("", title="🔸 LINE COLORS ↓", group=group_KZ)
+lineColorAsia       = input.color(color.blue,           "Asia Line Color",             group=group_KZ)
+lineColorLondon     = input.color(color.rgb(253, 114, 0), "London Line Color",         group=group_KZ)
+lineColorNY         = input.color(color.rgb(0, 255, 150), "NY Full Session Color",     group=group_KZ)
+lineColorNYAM       = input.color(color.aqua,            "NY AM Killzone Color",       group=group_KZ)
+lineColorNYLunch    = input.color(color.yellow,          "NY Lunch Killzone Color",    group=group_KZ)
+lineColorNYPM       = input.color(color.fuchsia,         "NY PM Killzone Color",       group=group_KZ)
+killzoneDottedLines = input.bool(false, "Dotted Killzone Lines", group=group_KZ)
+
+
+// ── LABEL SETTINGS ──
+_ = input.string("", title="📝 LABEL SETTINGS ↓", group=group_KZ)
+showLabels          = input.bool(true,  "Show High/Low Labels",                         group=group_KZ)
+labelAlignOpt       = input.string("Center", "Label Alignment", options=["Left", "Center", "Right"], group=group_KZ)
+extendBars          = input.int(1500,   "Line Extend Length", minval=1, maxval=1500,    group=group_KZ)
+color sessionLabelTextColor = input.color(color.white, "Killzone Label Text Color", group=group_KZ)
+
+
+
+// ── KILLZONE SESSION HANDLER ──
+f_handleSession(sessionName, enabled, startHour, endHour, sessionColor) =>
+    var float highVal  = na
+    var float lowVal   = na
+    var int   highIdx  = na
+    var int   lowIdx   = na
+    var line  highLine = na
+    var line  lowLine  = na
+    var int   highEnd  = na
+    var int   lowEnd   = na
+    var label highLbl  = na
+    var label lowLbl   = na
+    var int   prevDay  = na
+
+    tz = "America/New_York"
+    currentDay = int(timestamp("GMT", year, 1, 1, 0, 0))
+    currentDay := int((time - currentDay) / 86400000) + 1
+
+    startSession = timestamp(tz, year, month, dayofmonth, startHour, 0)
+    endSession   = timestamp(tz, year, month, dayofmonth + (endHour < startHour ? 1 : 0), endHour, 0)
+    inSession    = time >= startSession and time < endSession
+    newSession   = inSession and not inSession[1]
+
+    // reset per new day
+    if currentDay != prevDay
+        highVal := na
+        lowVal := na
+        highIdx := na
+        lowIdx := na
+        highLine := na
+        lowLine := na
+        highLbl := na
+        lowLbl := na
+        highEnd := na
+        lowEnd := na
+        prevDay := currentDay
+
+    if enabled
+        // session extremes
+        if newSession
+            highVal := high
+            lowVal := low
+            highIdx := bar_index
+            lowIdx := bar_index
+        else if inSession
+            if high > highVal
+                highVal := high
+                highIdx := bar_index
+            if low < lowVal
+                lowVal := low
+                lowIdx := bar_index
+
+        // on session close: draw static lines
+        if not inSession and inSession[1]
+            highLine := line.new(x1=highIdx, y1=highVal, x2=highIdx + 1, y2=highVal, color=sessionColor, width=1, style=killzoneDottedLines ? line.style_dotted : line.style_solid)
+            lowLine  := line.new(x1=lowIdx,  y1=lowVal,  x2=lowIdx  + 1, y2=lowVal,  color=sessionColor, width=1, style=killzoneDottedLines ? line.style_dotted : line.style_solid)
+            highEnd := highIdx + extendBars
+            lowEnd  := lowIdx  + extendBars
+
+            if showLabels
+                // HIGH label
+                highName = sessionName
+                hPos = getIndexOf(labeledHighs, highVal)
+                if hPos >= 0
+                    label.delete(array.get(labeledHighHandles, hPos))
+                    array.remove(labeledHighs, hPos)
+                    array.remove(labeledHighHandles, hPos)
+                    if sessionName == "NY"
+                        highName := "NY"
+                highLbl := label.new(highIdx + 10, highVal, highName + " High", textcolor=sessionLabelTextColor, size=size.small, style=label.style_none)
+                array.push(labeledHighs, highVal)
+                array.push(labeledHighHandles, highLbl)
+
+                // LOW label
+                lowName = sessionName
+                lPos = getIndexOf(labeledLows, lowVal)
+                if lPos >= 0
+                    label.delete(array.get(labeledLowHandles, lPos))
+                    array.remove(labeledLows, lPos)
+                    array.remove(labeledLowHandles, lPos)
+                    if sessionName == "NY"
+                        lowName := "NY"
+                lowLbl := label.new(lowIdx + 10, lowVal, lowName + " Low", textcolor=sessionLabelTextColor, size=size.small, style=label.style_none)
+                array.push(labeledLows, lowVal)
+                array.push(labeledLowHandles, lowLbl)
+
+        // extend lines and shift labels
+        if not na(highLine)
+            if bar_index <= highEnd
+                line.set_x2(highLine, bar_index)
+            if high > highVal
+                highEnd := bar_index
+            if showLabels and not na(highLbl)
+                x1 = line.get_x1(highLine)
+                x2 = line.get_x2(highLine)
+                offsetRight = 25
+                newX = labelAlignOpt == "Left" ? x1 + 10 : labelAlignOpt == "Center" ? math.round((x1 + x2) / 2) : x2 - offsetRight
+                label.set_x(highLbl, newX)
+
+        if not na(lowLine)
+            if bar_index <= lowEnd
+                line.set_x2(lowLine, bar_index)
+            if low < lowVal
+                lowEnd := bar_index
+            if showLabels and not na(lowLbl)
+                x1 = line.get_x1(lowLine)
+                x2 = line.get_x2(lowLine)
+                offsetRight = 25
+                newX = labelAlignOpt == "Left" ? x1 + 10 : labelAlignOpt == "Center" ? math.round((x1 + x2) / 2) : x2 - offsetRight
+                label.set_x(lowLbl, newX)
+
+        // Break logic for Killzone lines — resets when price pierces high/low
+        if not na(highLine) and high >= highVal
+            line.set_extend(highLine, extend.none)
+            highLine := na
+        if not na(lowLine) and low <= lowVal
+            line.set_extend(lowLine, extend.none)
+            lowLine := na
+
+// Run ICT Session Logic
+f_handleSession("Asia", enableAsiaSession, 20, 0, lineColorAsia)
+f_handleSession("London", enableLondonSession, 2, 5, lineColorLondon)
+f_handleSession("NY", enableNYSession, 9, 16, lineColorNY)             // 8:30am CST to market close
+f_handleSession("NY AM", enableNYAM, 9, 11, lineColorNYAM)            // 8:30am CST to 10:00am CST
+f_handleSession("NY Lunch", enableNYLunch, 11, 13, lineColorNYLunch)
+f_handleSession("NY PM", enableNYPM, 13, 15, lineColorNYPM)
+
+// ───── Checklist State Setup ─────
+var string[] checklistLabels = array.new_string()
+var bool[] statuses = array.new_bool()
+var table checklistTable = na
+checklistTablePos = checklistPosition == "Top Right" ? position.top_right : checklistPosition == "Top Left" ? position.top_left : checklistPosition == "Bottom Left" ? position.bottom_left : position.bottom_right
+
+// Create table ONCE
+if showChecklist and na(checklistTable)
+    checklistTable := table.new(checklistTablePos, 2, 9, border_width=1, frame_color=color.new(color.white, 70), frame_width=1, border_color=color.gray, bgcolor=color.new(color.black, 85))
+
+// ───── Checklist Drawing Function ─────
+f_drawChecklist() =>
+    if array.size(checklistLabels) == 0
+        array.push(checklistLabels, "Premium & Discount")
+        array.push(checklistLabels, "Major Liq Sweep")
+        array.push(checklistLabels, "Good Reaction")
+        array.push(checklistLabels, "Inside Killzone")
+        array.push(checklistLabels, "Good Momentum")
+        array.push(checklistLabels, "Clear DOL")
+        array.push(checklistLabels, "SMT")
+        array.push(checklistLabels, "Delivering from HTF Gap")
+    if array.size(statuses) == 0
+        array.push(statuses, c1)
+        array.push(statuses, c2)
+        array.push(statuses, c3)
+        array.push(statuses, c4)
+        array.push(statuses, c5)
+        array.push(statuses, c6)
+        array.push(statuses, c7)
+        array.push(statuses, c8)
+
+    checklistFontSize = checklistSizeOpt == "Small" ? size.tiny : checklistSizeOpt == "Large" ? size.normal : size.small
+
+
+    if not na(checklistTable) and bar_index % 5 == 0
+        total = array.size(statuses)
+        checked = 0
+
+        for i = 0 to total - 1
+            labelText = array.get(checklistLabels, i)
+            isChecked = array.get(statuses, i)
+            symbol = isChecked ? "✅" : "❌"
+            symbolColor = isChecked ? color.green : color.red
+            table.cell(checklistTable, 0, i, symbol, text_color=symbolColor, text_size=checklistFontSize, text_halign=text.align_center, text_valign=text.align_center, bgcolor=color.new(color.black, 90))
+            table.cell(checklistTable, 1, i, labelText, text_color=color.white, text_size=checklistFontSize, text_halign=text.align_left, text_valign=text.align_center, bgcolor=color.new(color.black, 90))
+            if isChecked
+                checked += 1
+
+        // Final summary row
+        summary = str.tostring(checked) + "/" + str.tostring(total) + " Confluences"
+        table.cell(checklistTable, 0, total, "🧠", text_color=color.orange, text_size=checklistFontSize, text_halign=text.align_center, text_valign=text.align_center, bgcolor=color.new(color.black, 90))
+        table.cell(checklistTable, 1, total, summary, text_color=color.orange, text_size=checklistFontSize, text_halign=text.align_left, text_valign=text.align_center, bgcolor=color.new(color.black, 90))
+
+// Real-time confluence checklist rendering with user-defined state memory
+if showChecklist
+    f_drawChecklist()
+
