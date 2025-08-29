@@ -1,0 +1,306 @@
+
+//@version=5
+indicator("FVG Higher Time Frame v3", "LuxAlgo's FVG HTF v3", overlay = true, max_lines_count = 500, max_boxes_count = 500)
+
+//------------------------------------------------------------------------------
+//Settings
+//-----------------------------------------------------------------------------{
+thresholdPer = input.float(0.04, "Threshold %", minval = 0, maxval = 100, step = .01, inline = 'threshold', group = 'FVG Settings')
+auto = input(false, "Auto", inline = 'threshold', group = 'FVG Settings')
+maxKeep_FVGs = input.int(5, "Max FVGs to Display", minval=1, tooltip="Only the N most‐recent FVGs will remain on the chart & in memory", group = 'FVG Settings')
+showLast_FVGs = input.int(0, 'Unmitigated FVG Levels', minval = 0, group = 'FVG Settings')
+mitigationLevels = input.bool(false, 'Mitigation Levels for FVGs', group = 'FVG Settings')
+tf_input_1 = input.timeframe('60', "FVG Timeframe", group = 'FVG Settings')
+
+//Style
+extend = input.int(20, 'Extend', minval = 0, inline = 'extend', group = 'FVG Settings')
+dynamic = input(false, 'Dynamic', inline = 'extend', group = 'FVG Settings')
+bullCss = input.color(color.new(#088f99, 70), "Bullish FVG", group = 'FVG Settings')
+bearCss = input.color(color.new(#f23675, 70), "Bearish FVG", group = 'FVG Settings')
+border_color_input = input.color(color.rgb(185, 191, 217, 40), title = "Box Border Color", group = "FVG Settings")
+
+// New Label Settings
+FVG_label_color    = input.color(color.rgb(186, 188, 196, 50), title = "Box Labels", group = "FVG Settings")
+box_label_size_input = input.string('Small', title = 'Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="FVG Settings")
+invis = color.new(#9b9c9b, 90)
+
+// Function to convert user selection into size
+GetBoxLabelSize(BoxLabelSize) =>
+    BoxLabelSize == 'Tiny'  ? size.tiny  : BoxLabelSize == 'Small' ? size.small :BoxLabelSize == 'Normal'? size.normal: size.small  // Default
+// Convert size settings string into actual size
+BoxLabelSize = GetBoxLabelSize(box_label_size_input)
+//-----------------------------------------------------------------------------}
+//UDT's
+//-----------------------------------------------------------------------------{
+type fvg
+    float max
+    float min
+    bool  isbull
+    int   t = time
+
+var string _fvgLabel = "FVG"
+var string _plus     = "+"
+var string _minus    = "-"
+var string _empty    = ""
+
+//-----------------------------------------------------------------------------}
+//Methods/Functions
+//-----------------------------------------------------------------------------{
+
+// Function to format timeframe into string
+format_tf(tf_input) =>
+    // Minutes handling (1–59)
+    isMinutes = str.tonumber(tf_input) and str.tonumber(tf_input) < 60
+    // Hours handling (60, 120, 180, 240)
+    isHours = str.tonumber(tf_input) and str.tonumber(tf_input) % 60 == 0 and str.tonumber(tf_input) <= 240
+    
+    tf_result = 
+         isMinutes ? str.tostring(str.tonumber(tf_input)) + "min" :
+         isHours   ? str.tostring(str.tonumber(tf_input) / 60) + "H" :
+         tf_input  // leave day/week/month etc. as-is
+    tf_result
+
+
+
+method tosolid(color id)=> color.rgb(color.r(id),color.g(id),color.b(id))
+
+detect()=>
+    var new_fvg = fvg.new(na, na, na, na)
+    threshold = auto ? ta.cum((high - low) / low) / bar_index : thresholdPer / 100
+
+    bull_fvg = low > high[2] and close[1] > high[2] and (low - high[2]) / high[2] > threshold
+    bear_fvg = high < low[2] and close[1] < low[2] and (low[2] - high) / high > threshold
+    
+    if bull_fvg
+        new_fvg := fvg.new(low, high[2], true)
+    else if bear_fvg
+        new_fvg := fvg.new(low[2], high, false)
+
+    [bull_fvg, bear_fvg, new_fvg]
+
+// Helper to create an FVG box anchored to the higher-TF timestamp
+// - new_fvg: the fvg record returned from request.security
+// - isBull: true for bullish FVG (use bullCss), false for bearish (use bearCss)
+// Returns the created box
+
+
+f_tf_in_minutes(tf_str) =>
+    S = str.upper(tf_str)
+    nOnly = str.tonumber(S)
+    if not na(nOnly)
+        nOnly
+    else
+        last = str.substring(S, str.length(S) - 1, str.length(S))
+        n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+        last == "S" ? n / 60 :
+         last == "H" ? n * 60 :
+         last == "D" ? n * 1440 :
+         last == "W" ? n * 10080 :
+         last == "M" ? n * 43200 : na    // months ≈ 30 days
+
+
+create_fvg_box(new_fvg, isBull) =>
+    var box b = na
+
+    // minutes for FVG TF and chart TF (in case you need both)
+    tf_minutes       = f_tf_in_minutes(tf_input_1)
+    chart_tf_minutes = f_tf_in_minutes(timeframe.period)
+    tfString = format_tf(tf_input_1)
+    // choose what "extend" means. If it's "bars of the FVG timeframe":
+    // total minutes to extend = extend_bars * minutes_per_FVG_bar
+    extend_minutes = extend * chart_tf_minutes
+
+    // convert minutes -> milliseconds and force INT
+    // delta_ms = int(math.round(extend_minutes * 60000))
+    delta_ms = int(math.round(extend_minutes * 60000)/(chart_tf_minutes/tf_minutes+.001))
+    left_ts  = new_fvg.t                   // this is series int (ms)
+    right_ts = left_ts + delta_ms +1        // now series int (ms)
+
+    b := box.new(left_ts, new_fvg.max, right_ts, new_fvg.min,
+                 xloc = xloc.bar_time,
+                 border_color= border_color_input,
+                 bgcolor = isBull ? bullCss : bearCss,
+                 text = (isBull ? tfString + _empty + _fvgLabel + _plus : tfString + _empty + _fvgLabel + _minus),
+                 text_halign = text.align_right, text_valign = text.align_bottom,
+                 text_size = BoxLabelSize, text_color = FVG_label_color)
+
+    b
+
+
+//-----------------------------------------------------------------------------}
+//FVG's detection/display
+//-----------------------------------------------------------------------------{
+var float max_bull_fvg = na, var float min_bull_fvg = na, var bull_count = 0, var bull_mitigated = 0
+var float max_bear_fvg = na, var float min_bear_fvg = na, var bear_count = 0, var bear_mitigated = 0
+var t = 0
+
+var fvg_records = array.new<fvg>(0)
+var fvg_areas = array.new<box>(0)
+
+[bull_fvg, bear_fvg, new_fvg] = request.security(syminfo.tickerid, tf_input_1, detect())
+
+//Bull FVG's
+if bull_fvg and new_fvg.t != t
+    if dynamic
+        max_bull_fvg := new_fvg.max
+        min_bull_fvg := new_fvg.min
+    
+    // Label text and direction
+    bullish_direction = new_fvg.isbull ? 1 : 0
+    label_text = bullish_direction == 1 ? _fvgLabel + _plus : _fvgLabel + _minus
+
+    //Populate FVG array
+    if not dynamic
+        // create time-anchored box (default Minutes)
+        b = create_fvg_box(new_fvg, true)
+        fvg_areas.unshift(b)
+    fvg_records.unshift(new_fvg)
+ 
+    if fvg_records.size() > maxKeep_FVGs
+        // remove the oldest record
+        idx = fvg_records.size() - 1
+        fvg_records.remove(idx)
+        // and its matching box
+        if not dynamic
+            oldBox = fvg_areas.remove(idx)
+            oldBox.delete()
+
+
+    bull_count += 1
+    t := new_fvg.t
+else if dynamic
+    max_bull_fvg := math.max(math.min(close, max_bull_fvg), min_bull_fvg)
+
+//Bear FVG's
+if bear_fvg and new_fvg.t != t
+    if dynamic
+        max_bear_fvg := new_fvg.max
+        min_bear_fvg := new_fvg.min
+
+    // Label text and direction
+    bullish_direction = new_fvg.isbull ? 1 : 0
+    label_text = bullish_direction == 1 ? _fvgLabel + _plus : _fvgLabel + _minus
+
+    //Populate FVG array
+    if not dynamic
+        // create time-anchored box (default Minutes)
+        b = create_fvg_box(new_fvg, false)
+        fvg_areas.unshift(b)
+    fvg_records.unshift(new_fvg)
+
+    if fvg_records.size() > maxKeep_FVGs
+        // remove the oldest record
+        idx = fvg_records.size() - 1
+        fvg_records.remove(idx)
+        // and its matching box
+        if not dynamic
+            oldBox = fvg_areas.remove(idx)
+            oldBox.delete()
+
+
+    bear_count += 1
+    t := new_fvg.t
+else if dynamic
+    min_bear_fvg := math.min(math.max(close, min_bear_fvg), max_bear_fvg) 
+
+//-----------------------------------------------------------------------------}
+//Unmitigated/Mitigated lines
+//-----------------------------------------------------------------------------{
+//Test for mitigation
+if fvg_records.size() > 0
+    for i = fvg_records.size()-1 to 0
+        get = fvg_records.get(i)
+
+        if get.isbull
+            if close < get.min
+                //Display line if mitigated
+                if mitigationLevels
+                    line.new(get.t
+                      , get.min
+                      , time
+                      , get.min
+                      , xloc.bar_time
+                      , color = bullCss
+                      , style = line.style_dashed)
+
+                //Delete box
+                if not dynamic
+                    area = fvg_areas.remove(i)
+                    area.delete()
+
+                fvg_records.remove(i)
+                bull_mitigated += 1
+        else if close > get.max
+            //Display line if mitigated
+            if mitigationLevels
+                line.new(get.t
+                  , get.max
+                  , time
+                  , get.max
+                  , xloc.bar_time
+                  , color = bearCss
+                  , style = line.style_dashed)
+
+            //Delete box
+            if not dynamic
+                area = fvg_areas.remove(i)
+                area.delete()
+            
+            fvg_records.remove(i)
+            bear_mitigated += 1
+
+//Unmitigated lines
+var unmitigated = array.new<line>(0)
+
+//Remove umitigated lines 
+if barstate.islast and showLast_FVGs > 0 and fvg_records.size() > 0
+    if unmitigated.size() > 0 
+        for element in unmitigated
+            element.delete()
+        unmitigated.clear()
+
+    for i = 0 to math.min(showLast_FVGs-1, fvg_records.size()-1)
+        get = fvg_records.get(i)
+
+        unmitigated.push(line.new(get.t
+          , get.isbull ? get.min : get.max 
+          , time
+          , get.isbull ? get.min : get.max
+          , xloc.bar_time
+          , color = get.isbull ? bullCss : bearCss))
+
+//-----------------------------------------------------------------------------}
+//Plots
+//-----------------------------------------------------------------------------{
+//Dynamic Bull FVG
+max_bull_plot = plot(max_bull_fvg, color = na)
+min_bull_plot = plot(min_bull_fvg, color = na)
+fill(max_bull_plot, min_bull_plot, color = bullCss)
+
+//Dynamic Bear FVG
+max_bear_plot = plot(max_bear_fvg, color = na)
+min_bear_plot = plot(min_bear_fvg, color = na)
+fill(max_bear_plot, min_bear_plot, color = bearCss)
+
+//-----------------------------------------------------------------------------}
+//Alerts
+//-----------------------------------------------------------------------------{
+alertcondition(bull_count > bull_count[1], 'Bullish FVG', 'Bullish FVG detected')
+alertcondition(bear_count > bear_count[1], 'Bearish FVG', 'Bearish FVG detected')
+
+alertcondition(bull_mitigated > bull_mitigated[1], 'Bullish FVG Mitigation', 'Bullish FVG mitigated')
+alertcondition(bear_mitigated > bear_mitigated[1], 'Bearish FVG Mitigation', 'Bearish FVG mitigated')
+
+//-----------------------------------------------------------------------------}
+
+
+
+
+// Get the current chart's timeframe as a string
+chartTimeframe = timeframe.period
+
+// Display the timeframe on the chart using a label
+if barstate.islastconfirmedhistory
+    label.new(bar_index, high, "Chart Timeframe: " + chartTimeframe, 
+              xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, 
+              color=color.blue, textcolor=color.white, size=size.normal)
