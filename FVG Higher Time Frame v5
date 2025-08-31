@@ -1,0 +1,407 @@
+//@version=5
+indicator("FVG Higher Time Frame v5 (fixed multi-TF)", "LuxAlgo's FVG HTF v5", overlay = true, max_lines_count = 500, max_boxes_count = 500)
+
+//------------------------------------------------------------------------------
+//Settings
+//-----------------------------------------------------------------------------{
+thresholdPer = input.float(0.04, "Threshold %", minval = 0, maxval = 100, step = .01, inline = 'threshold', group = 'FVG Settings')
+auto = input(false, "Auto", inline = 'threshold', group = 'FVG Settings')
+maxKeep_FVGs = input.int(5, "Max FVGs to Display", minval=1, tooltip="Only the N most‐recent FVGs will remain on the chart & in memory", group = 'FVG Settings')
+showLast_FVGs = input.int(0, 'Unmitigated FVG Levels', minval = 0, group = 'FVG Settings')
+mitigationLevels = input.bool(false, 'Mitigation Levels for FVGs', group = 'FVG Settings')
+tf_input_1 = input.timeframe('15', "FVG Timeframe 1", group = 'FVG Settings')
+tf_input_2 = input.timeframe('60', "FVG Timeframe 2", group = 'FVG Settings')
+
+//Style
+extend = input.int(20, 'Extend', minval = 0, inline = 'extend', group = 'FVG Settings')
+dynamic = input(false, 'Dynamic', inline = 'extend', group = 'FVG Settings')
+
+// TF1 colors (existing)
+bullCss = input.color(color.new(#088f99, 70), "Bullish FVG (TF1)", group = 'FVG Settings')
+bearCss = input.color(color.new(#da4430, 70), "Bearish FVG (TF1)", group = 'FVG Settings')
+// TF2 colors (NEW)
+bullCss_2 = input.color(color.new(#1eff8f, 70), "Bullish FVG (TF2)", group = 'FVG Settings')  // (#1e90ff, 70)
+bearCss_2 = input.color(color.new(#f23675, 70), "Bearish FVG (TF2)", group = 'FVG Settings')  // (#ff7f50, 70)
+
+border_color_input = input.color(color.rgb(185, 191, 217, 40), title = "Box Border Color", group = "FVG Settings")
+
+// New Label Settings
+FVG_label_color    = input.color(color.rgb(186, 188, 196, 50), title = "Box Labels", group = "FVG Settings")
+box_label_size_input = input.string('Small', title = 'Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="FVG Settings")
+invis = color.new(#9b9c9b, 90)
+
+// Function to convert user selection into size
+GetBoxLabelSize(BoxLabelSize) =>
+    BoxLabelSize == 'Tiny'  ? size.tiny  : BoxLabelSize == 'Small' ? size.small :BoxLabelSize == 'Normal'? size.normal: size.small  // Default
+// Convert size settings string into actual size
+BoxLabelSize = GetBoxLabelSize(box_label_size_input)
+//-----------------------------------------------------------------------------}
+//UDT's
+//-----------------------------------------------------------------------------{
+type fvg
+    float max
+    float min
+    bool  isbull
+    int   t = time
+
+var string _fvgLabel = "FVG"
+var string _plus     = "+"
+var string _minus    = "-"
+var string _empty    = ""
+
+//-----------------------------------------------------------------------------}
+//Methods/Functions
+//-----------------------------------------------------------------------------{
+
+// Function to format timeframe into string
+format_tf(tf_input) =>
+    // Minutes handling (1–59)
+    isMinutes = str.tonumber(tf_input) and str.tonumber(tf_input) < 60
+    // Hours handling (60, 120, 180, 240)
+    isHours = str.tonumber(tf_input) and str.tonumber(tf_input) % 60 == 0 and str.tonumber(tf_input) <= 240
+    
+    tf_result = 
+         isMinutes ? str.tostring(str.tonumber(tf_input)) + "min" :
+         isHours   ? str.tostring(str.tonumber(tf_input) / 60) + "H" :
+         tf_input  // leave day/week/month etc. as-is
+    tf_result
+
+method tosolid(color id)=> color.rgb(color.r(id),color.g(id),color.b(id))
+
+// ---------- MODIFIED detect() ----------
+// Return primitives rather than a custom object so callers can safely reconstruct an object locally.
+// Returns: [bull_fvg, bear_fvg, new_max, new_min, new_isbull, new_t]
+detect()=>
+    float out_max = na
+    float out_min = na
+    bool  out_isbull = na
+    int   out_t = na
+
+    threshold = auto ? ta.cum((high - low) / low) / bar_index : thresholdPer / 100
+
+    bull_fvg = low > high[2] and close[1] > high[2] and (low - high[2]) / high[2] > threshold
+    bear_fvg = high < low[2] and close[1] < low[2] and (low[2] - high) / high > threshold
+    
+    if bull_fvg
+        out_max := low
+        out_min := high[2]
+        out_isbull := true
+        out_t := time
+    else if bear_fvg
+        out_max := low[2]
+        out_min := high
+        out_isbull := false
+        out_t := time
+
+    [bull_fvg, bear_fvg, out_max, out_min, out_isbull, out_t]
+
+// TF-string -> minutes helper (used in extension math)
+f_tf_in_minutes(tf_str) =>
+    S = str.upper(tf_str)
+    nOnly = str.tonumber(S)
+    if not na(nOnly)
+        nOnly
+    else
+        last = str.substring(S, str.length(S) - 1, str.length(S))
+        n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+        last == "S" ? n / 60 :
+         last == "H" ? n * 60 :
+         last == "D" ? n * 1440 :
+         last == "W" ? n * 10080 :
+         last == "M" ? n * 43200 : na    // months ≈ 30 days
+
+// Generalized create_fvg_box that uses a passed-in TF string and colors (so labels & scaling are correct)
+create_fvg_box(new_fvg, isBull, tf_input_param, bull_color, bear_color) =>
+    var box b = na
+
+    // minutes for the FVG TF and chart TF
+    tf_minutes       = f_tf_in_minutes(tf_input_param)
+    chart_tf_minutes = f_tf_in_minutes(timeframe.period)
+    tfString = format_tf(tf_input_param)
+    // choose what "extend" means. Here extend is in chart bars; original author used extend * chart_tf_minutes
+    extend_minutes = extend * chart_tf_minutes
+
+    // convert minutes -> milliseconds and force INT
+    // prevent divide-by-zero by adding a small epsilon when necessary
+
+    tf_ratio = math.round((tf_minutes / (chart_tf_minutes + 0.001)))   // adjusted ratio
+    tf_ratio_adjustment=1
+    if tf_ratio > 200
+        tf_ratio_adjustment := 4
+    if tf_ratio > 1000
+        tf_ratio_adjustment := 6
+
+    // delta_ms calculation: scaled by ratio_guard (keeps relative scaling similar to your previous approach)
+    delta_ms = int(math.round(extend_minutes * 60000) * tf_ratio_adjustment)  //  / ratio_guard)
+    left_ts  = int(new_fvg.t)                   // ensure int
+    right_ts = left_ts + delta_ms + 1           // now int (ms)
+
+    b := box.new(left_ts, new_fvg.max, right_ts, new_fvg.min,
+                 xloc = xloc.bar_time,
+                 border_color = border_color_input,
+                 bgcolor = isBull ? bull_color : bear_color,
+                 text = (tfString + _empty + _fvgLabel + (isBull ? _plus : _minus)),
+                 text_halign = text.align_right, text_valign = text.align_bottom,
+                 text_size = BoxLabelSize, text_color = FVG_label_color)
+
+    b
+
+//-----------------------------------------------------------------------------}
+//FVG's detection/display for TF1 and TF2
+//-----------------------------------------------------------------------------{
+// Create per-TF data structures so they don't collide
+var fvg_records_1 = array.new<fvg>(0)
+var fvg_areas_1   = array.new<box>(0)
+var t1 = 0
+var float max_bull_fvg_1 = na, var float min_bull_fvg_1 = na, var bull_count_1 = 0, var bull_mitigated_1 = 0
+var float max_bear_fvg_1 = na, var float min_bear_fvg_1 = na, var bear_count_1 = 0, var bear_mitigated_1 = 0
+
+var fvg_records_2 = array.new<fvg>(0)
+var fvg_areas_2   = array.new<box>(0)
+var t2 = 0
+var float max_bull_fvg_2 = na, var float min_bull_fvg_2 = na, var bull_count_2 = 0, var bull_mitigated_2 = 0
+var float max_bear_fvg_2 = na, var float min_bear_fvg_2 = na, var bear_count_2 = 0, var bear_mitigated_2 = 0
+
+// Call detect() on both user timeframes
+[bull_fvg_1, bear_fvg_1, nf1_max, nf1_min, nf1_isbull, nf1_t] = request.security(syminfo.tickerid, tf_input_1, detect())
+[bull_fvg_2, bear_fvg_2, nf2_max, nf2_min, nf2_isbull, nf2_t] = request.security(syminfo.tickerid, tf_input_2, detect())
+
+// Reconstruct proper fvg objects locally (guarantees a non-na object to access fields on)
+new_fvg_1 = fvg.new(nf1_max, nf1_min, nf1_isbull, nf1_t)
+new_fvg_2 = fvg.new(nf2_max, nf2_min, nf2_isbull, nf2_t)
+
+// --- Handle TF1 FVGs ---
+if bull_fvg_1 and new_fvg_1.t != t1
+    if dynamic
+        max_bull_fvg_1 := new_fvg_1.max
+        min_bull_fvg_1 := new_fvg_1.min
+    
+    //Populate FVG array & create box
+    if not dynamic
+        b1 = create_fvg_box(new_fvg_1, true, tf_input_1, bullCss, bearCss)
+        fvg_areas_1.unshift(b1)
+    fvg_records_1.unshift(new_fvg_1)
+ 
+    if fvg_records_1.size() > maxKeep_FVGs
+        idx = fvg_records_1.size() - 1
+        fvg_records_1.remove(idx)
+        if not dynamic
+            oldBox = fvg_areas_1.remove(idx)
+            oldBox.delete()
+
+    bull_count_1 += 1
+    t1 := new_fvg_1.t
+else if dynamic
+    max_bull_fvg_1 := math.max(math.min(close, max_bull_fvg_1), min_bull_fvg_1)
+
+//Bear TF1
+if bear_fvg_1 and new_fvg_1.t != t1
+    if dynamic
+        max_bear_fvg_1 := new_fvg_1.max
+        min_bear_fvg_1 := new_fvg_1.min
+
+    if not dynamic
+        b1 = create_fvg_box(new_fvg_1, false, tf_input_1, bullCss, bearCss)
+        fvg_areas_1.unshift(b1)
+    fvg_records_1.unshift(new_fvg_1)
+
+    if fvg_records_1.size() > maxKeep_FVGs
+        idx = fvg_records_1.size() - 1
+        fvg_records_1.remove(idx)
+        if not dynamic
+            oldBox = fvg_areas_1.remove(idx)
+            oldBox.delete()
+
+    bear_count_1 += 1
+    t1 := new_fvg_1.t
+else if dynamic
+    min_bear_fvg_1 := math.min(math.max(close, min_bear_fvg_1), max_bear_fvg_1) 
+
+
+// --- Handle TF2 FVGs ---
+if bull_fvg_2 and new_fvg_2.t != t2
+    if dynamic
+        max_bull_fvg_2 := new_fvg_2.max
+        min_bull_fvg_2 := new_fvg_2.min
+    
+    if not dynamic
+        b2 = create_fvg_box(new_fvg_2, true, tf_input_2, bullCss_2, bearCss_2)
+        fvg_areas_2.unshift(b2)
+    fvg_records_2.unshift(new_fvg_2)
+ 
+    if fvg_records_2.size() > maxKeep_FVGs
+        idx = fvg_records_2.size() - 1
+        fvg_records_2.remove(idx)
+        if not dynamic
+            oldBox = fvg_areas_2.remove(idx)
+            oldBox.delete()
+
+    bull_count_2 += 1
+    t2 := new_fvg_2.t
+else if dynamic
+    max_bull_fvg_2 := math.max(math.min(close, max_bull_fvg_2), min_bull_fvg_2)
+
+//Bear TF2
+if bear_fvg_2 and new_fvg_2.t != t2
+    if dynamic
+        max_bear_fvg_2 := new_fvg_2.max
+        min_bear_fvg_2 := new_fvg_2.min
+
+    if not dynamic
+        b2 = create_fvg_box(new_fvg_2, false, tf_input_2, bullCss_2, bearCss_2)
+        fvg_areas_2.unshift(b2)
+    fvg_records_2.unshift(new_fvg_2)
+
+    if fvg_records_2.size() > maxKeep_FVGs
+        idx = fvg_records_2.size() - 1
+        fvg_records_2.remove(idx)
+        if not dynamic
+            oldBox = fvg_areas_2.remove(idx)
+            oldBox.delete()
+
+    bear_count_2 += 1
+    t2 := new_fvg_2.t
+else if dynamic
+    min_bear_fvg_2 := math.min(math.max(close, min_bear_fvg_2), max_bear_fvg_2) 
+
+//-----------------------------------------------------------------------------}
+//Unmitigated/Mitigated lines (separate per TF)
+//-----------------------------------------------------------------------------{
+// TF1 mitigation
+if fvg_records_1.size() > 0
+    for i = fvg_records_1.size()-1 to 0
+        get = fvg_records_1.get(i)
+
+        if get.isbull
+            if close < get.min
+                if mitigationLevels
+                    line.new(get.t
+                      , get.min
+                      , time
+                      , get.min
+                      , xloc.bar_time
+                      , color = bullCss
+                      , style = line.style_dashed)
+
+                if not dynamic
+                    area = fvg_areas_1.remove(i)
+                    area.delete()
+
+                fvg_records_1.remove(i)
+                bull_mitigated_1 += 1
+        else if close > get.max
+            if mitigationLevels
+                line.new(get.t
+                  , get.max
+                  , time
+                  , get.max
+                  , xloc.bar_time
+                  , color = bearCss
+                  , style = line.style_dashed)
+
+            if not dynamic
+                area = fvg_areas_1.remove(i)
+                area.delete()
+            
+            fvg_records_1.remove(i)
+            bear_mitigated_1 += 1
+
+// TF2 mitigation (uses TF2 colors)
+if fvg_records_2.size() > 0
+    for i = fvg_records_2.size()-1 to 0
+        get = fvg_records_2.get(i)
+
+        if get.isbull
+            if close < get.min
+                if mitigationLevels
+                    line.new(get.t
+                      , get.min
+                      , time
+                      , get.min
+                      , xloc.bar_time
+                      , color = bullCss_2
+                      , style = line.style_dashed)
+
+                if not dynamic
+                    area = fvg_areas_2.remove(i)
+                    area.delete()
+
+                fvg_records_2.remove(i)
+                bull_mitigated_2 += 1
+        else if close > get.max
+            if mitigationLevels
+                line.new(get.t
+                  , get.max
+                  , time
+                  , get.max
+                  , xloc.bar_time
+                  , color = bearCss_2
+                  , style = line.style_dashed)
+
+            if not dynamic
+                area = fvg_areas_2.remove(i)
+                area.delete()
+            
+            fvg_records_2.remove(i)
+            bear_mitigated_2 += 1
+
+//Unmitigated lines (both TFs)
+var unmitigated_1 = array.new<line>(0)
+var unmitigated_2 = array.new<line>(0)
+
+// TF1 unmitigated lines shown at last bar
+if barstate.islast and showLast_FVGs > 0 and fvg_records_1.size() > 0
+    if unmitigated_1.size() > 0 
+        for element in unmitigated_1
+            element.delete()
+        unmitigated_1.clear()
+
+    for i = 0 to math.min(showLast_FVGs-1, fvg_records_1.size()-1)
+        get = fvg_records_1.get(i)
+
+        unmitigated_1.push(line.new(get.t
+          , get.isbull ? get.min : get.max 
+          , time
+          , get.isbull ? get.min : get.max
+          , xloc.bar_time
+          , color = get.isbull ? bullCss : bearCss))
+
+// TF2 unmitigated lines shown at last bar (uses TF2 colors)
+if barstate.islast and showLast_FVGs > 0 and fvg_records_2.size() > 0
+    if unmitigated_2.size() > 0 
+        for element in unmitigated_2
+            element.delete()
+        unmitigated_2.clear()
+
+    for i = 0 to math.min(showLast_FVGs-1, fvg_records_2.size()-1)
+        get = fvg_records_2.get(i)
+
+        unmitigated_2.push(line.new(get.t
+          , get.isbull ? get.min : get.max 
+          , time
+          , get.isbull ? get.min : get.max
+          , xloc.bar_time
+          , color = get.isbull ? bullCss_2 : bearCss_2))
+
+//-----------------------------------------------------------------------------}
+//Plots
+//-----------------------------------------------------------------------------{
+//Dynamic Bull FVG (combined plots kept na so fill still works if dynamic is used)
+max_bull_plot = plot(max_bull_fvg_1, color = na)
+min_bull_plot = plot(min_bull_fvg_1, color = na)
+fill(max_bull_plot, min_bull_plot, color = bullCss)
+
+//Dynamic Bear FVG
+max_bear_plot = plot(max_bear_fvg_1, color = na)
+min_bear_plot = plot(min_bear_fvg_1, color = na)
+fill(max_bear_plot, min_bear_plot, color = bearCss)
+
+//-----------------------------------------------------------------------------}
+//Alerts (combined counts across TFs for convenience)
+alertcondition(bull_count_1 + bull_count_2 > (bull_count_1 + bull_count_2)[1], 'Bullish FVG', 'Bullish FVG detected')
+alertcondition(bear_count_1 + bear_count_2 > (bear_count_1 + bear_count_2)[1], 'Bearish FVG', 'Bearish FVG detected')
+
+alertcondition(bull_mitigated_1 + bull_mitigated_2 > (bull_mitigated_1 + bull_mitigated_2)[1], 'Bullish FVG Mitigation', 'Bullish FVG mitigated')
+alertcondition(bear_mitigated_1 + bear_mitigated_2 > (bear_mitigated_1 + bear_mitigated_2)[1], 'Bearish FVG Mitigation', 'Bearish FVG mitigated')
+
+//-----------------------------------------------------------------------------}
