@@ -1,0 +1,1212 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/create_ob_box$0
+// © Sax
+
+
+//@version=5
+indicator("Order Blocks, Higher Time Frame", shorttitle="Order Blocks HTF", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ----------------------- Inputs -----------------------
+classic_min_seq    = input.int(1, "Classic Minimum OB Series Length (min_seq)", minval=1, group='General OB Settings')
+classic_max_valid  = input.int(10, "Classic Maximum Series Validity (bars)", minval=1, group='General OB Settings')
+confirm_on_close   = input.bool(true, 'Only confirm on candle close', group='General OB Settings')
+extend             = input.int(100, 'Extend OB box length', minval = 0, group = 'General OB Settings')
+maxKeep_OBs_chart  = input.int(3, "Max OBs to Display (chart TF)", minval=0, group='General OB Settings')
+max_ext_days = input.int(50, "Max extension (days, cap)", minval=1, group='General OB Settings')
+
+// Higher TF inputs
+tf_input_1 = input.timeframe('15',  "OB Timeframe 1 (TF1)", group = 'HTF 1 OB Settings')
+maxKeep_OBs_tf1    = input.int(3, "Max OBs to Display (TF1)", minval=0, group='HTF 1 OB Settings')
+tf_input_2 = input.timeframe('60', "OB Timeframe 2 (TF2)", group = 'HTF 2 OB Settings')
+maxKeep_OBs_tf2    = input.int(3, "Max OBs to Display (TF2)", minval=0, group='HTF 2 OB Settings')
+tf_input_3 = input.timeframe('240',   "OB Timeframe 3 (TF3)", group = 'HTF 3 OB Settings')
+maxKeep_OBs_tf3    = input.int(3, "Max OBs to Display (TF3)", minval=0, group='HTF 3 OB Settings')
+
+// HTF colors (unconfirmed + confirmed per TF)
+cBull_box_tf1        = input.color(color.new(#089981, 85), "Bullish OB (TF1) - Unconfirmed", group='HTF Style')
+cBear_box_tf1        = input.color(color.new(#f23655, 85), "Bearish OB (TF1) - Unconfirmed", group='HTF Style')
+cBull_box_tf1_conf   = input.color(color.new(#089981, 70), "Bullish OB (TF1) - Confirmed", group='HTF Style')
+cBear_box_tf1_conf   = input.color(color.new(#f23655, 70), "Bearish OB (TF1) - Confirmed", group='HTF Style')
+
+cBull_box_tf2        = input.color(color.new(#1eff8f, 85), "Bullish OB (TF2) - Unconfirmed", group='HTF Style')
+cBear_box_tf2        = input.color(color.new(#f23675, 85), "Bearish OB (TF2) - Unconfirmed", group='HTF Style')
+cBull_box_tf2_conf   = input.color(color.new(#1eff8f, 70), "Bullish OB (TF2) - Confirmed", group='HTF Style')
+cBear_box_tf2_conf   = input.color(color.new(#f23675, 70), "Bearish OB (TF2) - Confirmed", group='HTF Style')
+
+// TF3 colors
+cBull_box_tf3        = input.color(color.new(#4cc0ff, 85), "Bullish OB (TF3) - Unconfirmed", group='HTF Style')
+cBear_box_tf3        = input.color(color.new(#ff8a8a, 85), "Bearish OB (TF3) - Unconfirmed", group='HTF Style')
+cBull_box_tf3_conf   = input.color(color.new(#4cc0ff, 70), "Bullish OB (TF3) - Confirmed", group='HTF Style')
+cBear_box_tf3_conf   = input.color(color.new(#ff8a8a, 70), "Bearish OB (TF3) - Confirmed", group='HTF Style')
+
+// Chart TF colors (optional separate style; reusing TF1 confirmed/unconfirmed if desired)
+cBull_box_chart        = input.color(color.new(#00bfa5, 85), "Bullish OB (Chart TF) - Unconfirmed", group='OB Style Settings')
+cBear_box_chart        = input.color(color.new(#ff4d4d, 85), "Bearish OB (Chart TF) - Unconfirmed", group='OB Style Settings')
+cBull_box_chart_conf   = input.color(color.new(#00bfa5, 70), "Bullish OB (Chart TF) - Confirmed", group='OB Style Settings')
+cBear_box_chart_conf   = input.color(color.new(#ff4d4d, 70), "Bearish OB (Chart TF) - Confirmed", group='OB Style Settings')
+
+// Box style & labels
+border_unconf    = input.color(color.new(color.gray, 80), "Box Border (unconfirmed)", group='OB Style Settings')
+border_conf      = input.color(color.new(color.gray, 30), "Box Border (confirmed)", group='OB Style Settings')
+OB_label_color   = input.color(color.rgb(186, 188, 196, 50), title = "Order Block Box Labels", group = "OB Style Settings")
+box_label_size_input = input.string('Small', title = 'OB Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="OB Style Settings")
+GetBoxLabelSize(BoxLabelSize) =>
+    BoxLabelSize == 'Tiny' ? size.tiny : BoxLabelSize == 'Small' ? size.small : size.normal
+BoxLabelSize = GetBoxLabelSize(box_label_size_input)
+
+var string _OBLabel = "OB"
+var string _plus     = "+"
+var string _minus    = "-"
+var string _empty    = ""
+
+// ----------------------- Utilities -----------------------
+f_tf_in_minutes(tf_str) =>
+    S = str.upper(tf_str)
+    nOnly = str.tonumber(S)
+    if not na(nOnly)
+        nOnly
+    else
+        last = str.substring(S, str.length(S) - 1, str.length(S))
+        n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+        last == "S" ? n / 60 :
+         last == "H" ? n * 60 :
+         last == "D" ? n * 1440 :
+         last == "2D" ? n * 2880 :
+         last == "W" ? n * 10080 :
+         last == "2W" ? n * 20160 :
+         last == "M" ? n * 43200 : na
+
+// Human-friendly TF label: "15m", "1H", "2H", "4H", "D", "2D", "W", "2W", "M"
+format_tf(tf_input) =>
+    // handle numeric minute strings first
+    num = str.tonumber(tf_input)
+    if not na(num)
+        if num < 60
+            str.tostring(num) + "m"
+        else
+            // divisible by 60 -> hours
+            h = num / 60
+            str.tostring(h) + "H"
+    else
+        // non-numeric like "D", "2D", "W", "2W", "M" -> return as-is
+        tf_input
+
+// ----------------------- Types -----------------------
+type obtf
+    float top
+    float bottom
+    bool  isBull
+    int   start_t
+    int   formed_t
+    bool  confirmed
+
+// ----------------------- Arrays (per-TF) -----------------------
+var f_ob_records_chart = array.new<obtf>(0)
+var f_ob_areas_chart   = array.new<box>(0)
+var t0 = 0
+
+var f_ob_records_1 = array.new<obtf>(0)
+var f_ob_areas_1   = array.new<box>(0)
+var t1 = 0
+
+var f_ob_records_2 = array.new<obtf>(0)
+var f_ob_areas_2   = array.new<box>(0)
+var t2 = 0
+
+var f_ob_records_3 = array.new<obtf>(0)
+var f_ob_areas_3   = array.new<box>(0)
+var t3 = 0
+
+// ----------------------- HTF detection function (runs under request.security) -----------------------
+detect_ob() =>
+    bool out_found = false
+    float out_top = na
+    float out_bottom = na
+    bool out_isbull = na
+    int out_start_t = na
+    int out_formed_t = na
+
+    lookback = math.max(1, classic_max_valid + 2)
+    for L = classic_min_seq to classic_max_valid
+        for end_off = 1 to lookback
+            start_off = end_off + L - 1
+            if start_off > lookback
+                continue
+            // bearish run check
+            all_bear = true
+            for t = start_off to end_off
+                if not (close[t] < open[t])
+                    all_bear := false
+            if all_bear
+                first_high_val = high[start_off]
+                series_high_val = high[end_off]
+                series_low_val = low[end_off]
+                if close > open and close > first_high_val
+                    out_found := true
+                    out_top := series_high_val
+                    out_bottom := series_low_val
+                    out_isbull := true
+                    out_start_t := int(time[start_off])
+                    out_formed_t := int(time)
+                    break
+            // bullish run check
+            all_bull = true
+            for t2a = start_off to end_off
+                if not (close[t2a] > open[t2a])
+                    all_bull := false
+            if all_bull
+                first_low_val = low[start_off]
+                series_high_val2 = high[end_off]
+                series_low_val2 = low[end_off]
+                if close < open and close < first_low_val
+                    out_found := true
+                    out_top := series_high_val2
+                    out_bottom := series_low_val2
+                    out_isbull := false
+                    out_start_t := int(time[start_off])
+                    out_formed_t := int(time)
+                    break
+        if out_found
+            break
+
+    [out_found, out_top, out_bottom, out_isbull, out_start_t, out_formed_t]
+
+// ----------------------- HTF box creation (returns the box) -----------------------
+create_ob_box_tf(new_ob, tf_input_param, bull_color, bear_color) =>
+    tf_minutes       = f_tf_in_minutes(tf_input_param)
+    chart_tf_minutes = f_tf_in_minutes(timeframe.period)
+    extend_minutes = extend * chart_tf_minutes
+
+    tf_ratio = math.round((tf_minutes / (chart_tf_minutes + 0.001)))
+    tf_ratio_adjustment = 1
+    if tf_ratio > 200
+        tf_ratio_adjustment := 4
+    if tf_ratio > 1000
+        tf_ratio_adjustment := 6
+
+    delta_ms = int(math.round(extend_minutes * 60000) * tf_ratio_adjustment)
+    left_ts  = int(new_ob.start_t)
+    right_ts = left_ts + delta_ms + 1
+
+    cap_ms = int(max_ext_days * 1440 * 60000)
+    if right_ts - left_ts > cap_ms
+        right_ts := left_ts + cap_ms
+
+    // nice label showing human TF (e.g., "1H", "D")
+    label_tf = format_tf(tf_input_param)
+
+    b = box.new(left_ts, new_ob.top, right_ts, new_ob.bottom,
+             xloc = xloc.bar_time,
+             border_color = border_unconf,
+             bgcolor = new_ob.isBull ? bull_color : bear_color,
+             text = (label_tf + _empty + _OBLabel + (new_ob.isBull ? _plus : _minus)),
+             text_halign = text.align_right, text_valign = text.align_bottom,
+             text_size = BoxLabelSize, text_color = OB_label_color)
+    b
+
+// ----------------------- Helper: enforce per-TF cap -----------------------
+enforce_cap_single(arr_records, arr_areas, maxKeep) =>
+    m = math.max(0, maxKeep)  // local variable; safe to modify/use
+    while arr_records.size() > m
+        // remove oldest (we unshift when adding, so oldest is at end)
+        oldBox = arr_areas.remove(arr_areas.size() - 1)
+        if not na(oldBox)
+            box.delete(oldBox)
+        arr_records.remove(arr_records.size() - 1)
+
+// ----------------------- Call detect_ob() on Chart TF directly and via request.security for TF1, TF2, TF3 -----------------------
+// Chart time frame (run detect_ob directly)
+[b0_found, b0_top, b0_bot, b0_isbull, b0_start_t, b0_formed_t] = detect_ob()
+
+// TF1 & TF2 & TF3 via request.security
+[b1_found, b1_top, b1_bot, b1_isbull, b1_start_t, b1_formed_t] = request.security(syminfo.tickerid, tf_input_1, detect_ob(), lookahead = barmerge.lookahead_off)
+[b2_found, b2_top, b2_bot, b2_isbull, b2_start_t, b2_formed_t] = request.security(syminfo.tickerid, tf_input_2, detect_ob(), lookahead = barmerge.lookahead_off)
+[b3_found, b3_top, b3_bot, b3_isbull, b3_start_t, b3_formed_t] = request.security(syminfo.tickerid, tf_input_3, detect_ob(), lookahead = barmerge.lookahead_off)
+
+// ----------------------- Handle Chart TF OB (reconstruct & store) -----------------------
+if b0_found and not na(b0_start_t)
+    tmp0 = obtf.new(b0_top, b0_bot, b0_isbull, b0_start_t, b0_formed_t, false)
+    if tmp0.start_t != t0
+        b_created0 = create_ob_box_tf(tmp0, timeframe.period, cBull_box_chart, cBear_box_chart)
+        f_ob_areas_chart.unshift(b_created0)
+        f_ob_records_chart.unshift(tmp0)
+        t0 := tmp0.start_t
+        enforce_cap_single(f_ob_records_chart, f_ob_areas_chart, maxKeep_OBs_chart)
+
+// ----------------------- Handle TF1 OB (reconstruct & store) -----------------------
+if b1_found and not na(b1_start_t)
+    tmp1 = obtf.new(b1_top, b1_bot, b1_isbull, b1_start_t, b1_formed_t, false)
+    if tmp1.start_t != t1
+        b_created = create_ob_box_tf(tmp1, tf_input_1, cBull_box_tf1, cBear_box_tf1)
+        f_ob_areas_1.unshift(b_created)
+        f_ob_records_1.unshift(tmp1)
+        t1 := tmp1.start_t
+        enforce_cap_single(f_ob_records_1, f_ob_areas_1, maxKeep_OBs_tf1)
+
+// ----------------------- Handle TF2 OB (reconstruct & store) -----------------------
+if b2_found and not na(b2_start_t)
+    tmp2 = obtf.new(b2_top, b2_bot, b2_isbull, b2_start_t, b2_formed_t, false)
+    if tmp2.start_t != t2
+        b_created2 = create_ob_box_tf(tmp2, tf_input_2, cBull_box_tf2, cBear_box_tf2)
+        f_ob_areas_2.unshift(b_created2)
+        f_ob_records_2.unshift(tmp2)
+        t2 := tmp2.start_t
+        enforce_cap_single(f_ob_records_2, f_ob_areas_2, maxKeep_OBs_tf2)
+
+// ----------------------- Handle TF3 OB (reconstruct & store) -----------------------
+if b3_found and not na(b3_start_t)
+    tmp3 = obtf.new(b3_top, b3_bot, b3_isbull, b3_start_t, b3_formed_t, false)
+    if tmp3.start_t != t3
+        b_created3 = create_ob_box_tf(tmp3, tf_input_3, cBull_box_tf3, cBear_box_tf3)
+        f_ob_areas_3.unshift(b_created3)
+        f_ob_records_3.unshift(tmp3)
+        t3 := tmp3.start_t
+        enforce_cap_single(f_ob_records_3, f_ob_areas_3, maxKeep_OBs_tf3)
+
+// ----------------------- HTF Confirmation by WICK (change box color) -----------------------
+// Chart TF confirmations
+if f_ob_records_chart.size() > 0
+    for i = 0 to f_ob_records_chart.size()-1
+        rec = array.get(f_ob_records_chart, i)
+        area = array.get(f_ob_areas_chart, i)
+        if not rec.confirmed and time > rec.formed_t
+            if rec.isBull
+                if low < rec.top and close > rec.top
+                    if not na(area)
+                        box.set_bgcolor(area, cBull_box_chart_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_chart, i, rec)
+            else
+                if high > rec.bottom and close < rec.bottom
+                    if not na(area)
+                        box.set_bgcolor(area, cBear_box_chart_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_chart, i, rec)
+
+// TF1 confirmations
+if f_ob_records_1.size() > 0
+    for i = 0 to f_ob_records_1.size()-1
+        rec = array.get(f_ob_records_1, i)
+        area = array.get(f_ob_areas_1, i)
+        if not rec.confirmed and time > rec.formed_t
+            if rec.isBull
+                if low < rec.top and close > rec.top
+                    if not na(area)
+                        box.set_bgcolor(area, cBull_box_tf1_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_1, i, rec)
+            else
+                if high > rec.bottom and close < rec.bottom
+                    if not na(area)
+                        box.set_bgcolor(area, cBear_box_tf1_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_1, i, rec)
+
+// TF2 confirmations
+if f_ob_records_2.size() > 0
+    for i = 0 to f_ob_records_2.size()-1
+        rec = array.get(f_ob_records_2, i)
+        area = array.get(f_ob_areas_2, i)
+        if not rec.confirmed and time > rec.formed_t
+            if rec.isBull
+                if low < rec.top and close > rec.top
+                    if not na(area)
+                        box.set_bgcolor(area, cBull_box_tf2_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_2, i, rec)
+            else
+                if high > rec.bottom and close < rec.bottom
+                    if not na(area)
+                        box.set_bgcolor(area, cBear_box_tf2_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_2, i, rec)
+
+// TF3 confirmations
+if f_ob_records_3.size() > 0
+    for i = 0 to f_ob_records_3.size()-1
+        rec = array.get(f_ob_records_3, i)
+        area = array.get(f_ob_areas_3, i)
+        if not rec.confirmed and time > rec.formed_t
+            if rec.isBull
+                if low < rec.top and close > rec.top
+                    if not na(area)
+                        box.set_bgcolor(area, cBull_box_tf3_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_3, i, rec)
+            else
+                if high > rec.bottom and close < rec.bottom
+                    if not na(area)
+                        box.set_bgcolor(area, cBear_box_tf3_conf)
+                        box.set_border_color(area, border_conf)
+                    rec.confirmed := true
+                    array.set(f_ob_records_3, i, rec)
+
+// ----------------------- Mitigation (delete when fully closed through) -----------------------
+mitigated_count = 0
+// Chart TF mitigation (iterate oldest -> newest)
+if f_ob_records_chart.size() > 0
+    for i = f_ob_records_chart.size()-1 to 0
+        get = f_ob_records_chart.get(i)
+        area = f_ob_areas_chart.get(i)
+        if get.isBull
+            if (not confirm_on_close and close < get.bottom) or (confirm_on_close and barstate.isconfirmed and close < get.bottom)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_chart.remove(i)
+                f_ob_areas_chart.remove(i)
+                mitigated_count += 1
+        else
+            if (not confirm_on_close and close > get.top) or (confirm_on_close and barstate.isconfirmed and close > get.top)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_chart.remove(i)
+                f_ob_areas_chart.remove(i)
+                mitigated_count += 1
+
+// TF1 mitigation
+if f_ob_records_1.size() > 0
+    for i = f_ob_records_1.size()-1 to 0
+        get = f_ob_records_1.get(i)
+        area = f_ob_areas_1.get(i)
+        if get.isBull
+            if (not confirm_on_close and close < get.bottom) or (confirm_on_close and barstate.isconfirmed and close < get.bottom)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_1.remove(i)
+                f_ob_areas_1.remove(i)
+                mitigated_count += 1
+        else
+            if (not confirm_on_close and close > get.top) or (confirm_on_close and barstate.isconfirmed and close > get.top)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_1.remove(i)
+                f_ob_areas_1.remove(i)
+                mitigated_count += 1
+
+// TF2 mitigation
+if f_ob_records_2.size() > 0
+    for i = f_ob_records_2.size()-1 to 0
+        get = f_ob_records_2.get(i)
+        area = f_ob_areas_2.get(i)
+        if get.isBull
+            if (not confirm_on_close and close < get.bottom) or (confirm_on_close and barstate.isconfirmed and close < get.bottom)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_2.remove(i)
+                f_ob_areas_2.remove(i)
+                mitigated_count += 1
+        else
+            if (not confirm_on_close and close > get.top) or (confirm_on_close and barstate.isconfirmed and close > get.top)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_2.remove(i)
+                f_ob_areas_2.remove(i)
+                mitigated_count += 1
+
+// TF3 mitigation
+if f_ob_records_3.size() > 0
+    for i = f_ob_records_3.size()-1 to 0
+        get = f_ob_records_3.get(i)
+        area = f_ob_areas_3.get(i)
+        if get.isBull
+            if (not confirm_on_close and close < get.bottom) or (confirm_on_close and barstate.isconfirmed and close < get.bottom)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_3.remove(i)
+                f_ob_areas_3.remove(i)
+                mitigated_count += 1
+        else
+            if (not confirm_on_close and close > get.top) or (confirm_on_close and barstate.isconfirmed and close > get.top)
+                if not na(area)
+                    box.delete(area)
+                f_ob_records_3.remove(i)
+                f_ob_areas_3.remove(i)
+                mitigated_count += 1
+
+// Ensure per-TF caps after mitigation as well (safety)
+enforce_cap_single(f_ob_records_chart, f_ob_areas_chart, maxKeep_OBs_chart)
+enforce_cap_single(f_ob_records_1, f_ob_areas_1, maxKeep_OBs_tf1)
+enforce_cap_single(f_ob_records_2, f_ob_areas_2, maxKeep_OBs_tf2)
+enforce_cap_single(f_ob_records_3, f_ob_areas_3, maxKeep_OBs_tf3)
+
+// ----------------------- Alerts -----------------------
+bull_count_htf = 0
+bear_count_htf = 0
+// chart TF new OB
+if b0_found and not b0_found[1]
+    if b0_isbull
+        bull_count_htf += 1
+    else
+        bear_count_htf += 1
+// TF1
+if b1_found and not b1_found[1]
+    if b1_isbull
+        bull_count_htf += 1
+    else
+        bear_count_htf += 1
+// TF2
+if b2_found and not b2_found[1]
+    if b2_isbull
+        bull_count_htf += 1
+    else
+        bear_count_htf += 1
+// TF3
+if b3_found and not b3_found[1]
+    if b3_isbull
+        bull_count_htf += 1
+    else
+        bear_count_htf += 1
+
+alertcondition(bull_count_htf > 0, title='Bullish HTF OB', message='Bullish HTF Order Block detected')
+alertcondition(bear_count_htf > 0, title='Bearish HTF OB', message='Bearish HTF Order Block detected')
+alertcondition(mitigated_count > 0, title='HTF OB Mitigated', message='An HTF Order Block was mitigated (price closed through it)')
+
+
+
+
+
+// =============================================
+
+// THIS VERSION WORKS FINE BUT REQUIRES FROM FINE-TUNING
+// ================================================
+
+// //@version=5
+// indicator("Order Blocks, Higher Time Frame", shorttitle="Order Blocks HTF", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// // ----------------------- Inputs -----------------------
+// classic_min_seq    = input.int(1, "Classic Minimum OB Series Length (min_seq)", minval=1, group='OB Settings')
+// classic_max_valid  = input.int(10, "Classic Maximum Series Validity (bars)", minval=1, group='OB Settings')
+// confirm_on_close   = input.bool(true, 'Only confirm on candle close', group='OB Settings')
+
+// extend             = input.int(25, 'Extend (units)*', minval = 0, group = 'OB Settings')
+// // single control for combined HTF OBs (user requested)
+// maxKeep_OBs        = input.int(6, "Max OBs to Display (chart TF)", minval=1, group='OB Settings')
+
+// max_ext_days = input.int(50, "Max extension (days, cap)", minval=1, group='OB Settings')
+
+// // Higher TF inputs
+// tf_input_1 = input.timeframe('60', "OB Timeframe 1 (TF1)", group = 'HTF Settings')
+// tf_input_2 = input.timeframe('240', "OB Timeframe 2 (TF2)", group = 'HTF Settings')
+
+// // HTF colors (unconfirmed + confirmed per TF)
+// cBull_box_tf1        = input.color(color.new(#089981, 80), "Bullish OB (TF1) - Unconfirmed", group='HTF Style')
+// cBear_box_tf1        = input.color(color.new(#f23655, 80), "Bearish OB (TF1) - Unconfirmed", group='HTF Style')
+// cBull_box_tf1_conf   = input.color(color.new(#089981, 50), "Bullish OB (TF1) - Confirmed", group='HTF Style')
+// cBear_box_tf1_conf   = input.color(color.new(#f23655, 50), "Bearish OB (TF1) - Confirmed", group='HTF Style')
+
+// cBull_box_tf2        = input.color(color.new(#1eff8f, 80), "Bullish OB (TF2) - Unconfirmed", group='HTF Style')
+// cBear_box_tf2        = input.color(color.new(#f23675, 80), "Bearish OB (TF2) - Unconfirmed", group='HTF Style')
+// cBull_box_tf2_conf   = input.color(color.new(#1eff8f, 50), "Bullish OB (TF2) - Confirmed", group='HTF Style')
+// cBear_box_tf2_conf   = input.color(color.new(#f23675, 50), "Bearish OB (TF2) - Confirmed", group='HTF Style')
+
+// // Box style & labels
+// border_unconf    = input.color(color.new(color.gray, 80), "Box Border (unconfirmed)", group='OB Style Settings')
+// border_conf      = input.color(color.new(color.gray, 30), "Box Border (confirmed)", group='OB Style Settings')
+// OB_label_color   = input.color(color.rgb(186, 188, 196, 50), title = "Order Block Box Labels", group = "OB Style Settings")
+// box_label_size_input = input.string('Small', title = 'OB Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="OB Style Settings")
+// GetBoxLabelSize(BoxLabelSize) =>
+//     BoxLabelSize == 'Tiny' ? size.tiny : BoxLabelSize == 'Small' ? size.small : size.normal
+// BoxLabelSize = GetBoxLabelSize(box_label_size_input)
+
+// var string _OBLabel = "OB"
+// var string _plus     = "+"
+// var string _minus    = "-"
+// var string _empty    = ""
+
+// // ----------------------- Utilities -----------------------
+// f_tf_in_minutes(tf_str) =>
+//     S = str.upper(tf_str)
+//     nOnly = str.tonumber(S)
+//     if not na(nOnly)
+//         nOnly
+//     else
+//         last = str.substring(S, str.length(S) - 1, str.length(S))
+//         n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+//         last == "S" ? n / 60 :
+//          last == "H" ? n * 60 :
+//          last == "D" ? n * 1440 :
+//          last == "2D" ? n * 2880 :
+//          last == "W" ? n * 10080 :
+//          last == "2W" ? n * 20160 :
+//          last == "M" ? n * 43200 : na
+
+// // Human-friendly TF label: "15m", "1H", "2H", "4H", "D", "2D", "W", "2W", "M"
+// format_tf(tf_input) =>
+//     // handle numeric minute strings first
+//     num = str.tonumber(tf_input)
+//     if not na(num)
+//         if num < 60
+//             str.tostring(num) + "m"
+//         else
+//             // divisible by 60 -> hours
+//             h = num / 60
+//             str.tostring(h) + "H"
+//     else
+//         // non-numeric like "D", "2D", "W", "2W", "M" -> return as-is
+//         tf_input
+
+// // ----------------------- Types -----------------------
+// type obtf
+//     float top
+//     float bottom
+//     bool  isBull
+//     int   start_t
+//     int   formed_t
+//     bool  confirmed
+
+// // ----------------------- HTF arrays (PER-TF) -----------------------
+// var f_ob_records_1 = array.new<obtf>(0)
+// var f_ob_areas_1   = array.new<box>(0)
+// var t1 = 0
+
+// var f_ob_records_2 = array.new<obtf>(0)
+// var f_ob_areas_2   = array.new<box>(0)
+// var t2 = 0
+
+// // ----------------------- HTF detection function (runs under request.security) -----------------------
+// detect_ob() =>
+//     bool out_found = false
+//     float out_top = na
+//     float out_bottom = na
+//     bool out_isbull = na
+//     int out_start_t = na
+//     int out_formed_t = na
+
+//     lookback = math.max(1, classic_max_valid + 2)
+//     for L = classic_min_seq to classic_max_valid
+//         for end_off = 1 to lookback
+//             start_off = end_off + L - 1
+//             if start_off > lookback
+//                 continue
+//             // bearish run check
+//             all_bear = true
+//             for t = start_off to end_off
+//                 if not (close[t] < open[t])
+//                     all_bear := false
+//             if all_bear
+//                 first_high_val = high[start_off]
+//                 series_high_val = high[end_off]
+//                 series_low_val = low[end_off]
+//                 if close > open and close > first_high_val
+//                     out_found := true
+//                     out_top := series_high_val
+//                     out_bottom := series_low_val
+//                     out_isbull := true
+//                     out_start_t := int(time[start_off])
+//                     out_formed_t := int(time)
+//                     break
+//             // bullish run check
+//             all_bull = true
+//             for t2 = start_off to end_off
+//                 if not (close[t2] > open[t2])
+//                     all_bull := false
+//             if all_bull
+//                 first_low_val = low[start_off]
+//                 series_high_val2 = high[end_off]
+//                 series_low_val2 = low[end_off]
+//                 if close < open and close < first_low_val
+//                     out_found := true
+//                     out_top := series_high_val2
+//                     out_bottom := series_low_val2
+//                     out_isbull := false
+//                     out_start_t := int(time[start_off])
+//                     out_formed_t := int(time)
+//                     break
+//         if out_found
+//             break
+
+//     [out_found, out_top, out_bottom, out_isbull, out_start_t, out_formed_t]
+
+// // ----------------------- HTF box creation (returns the box) -----------------------
+// create_ob_box_tf(new_ob, tf_input_param, bull_color, bear_color) =>
+//     tf_minutes       = f_tf_in_minutes(tf_input_param)
+//     chart_tf_minutes = f_tf_in_minutes(timeframe.period)
+//     extend_minutes = extend * chart_tf_minutes
+
+//     tf_ratio = math.round((tf_minutes / (chart_tf_minutes + 0.001)))
+//     tf_ratio_adjustment = 1
+//     if tf_ratio > 200
+//         tf_ratio_adjustment := 4
+//     if tf_ratio > 1000
+//         tf_ratio_adjustment := 6
+
+//     delta_ms = int(math.round(extend_minutes * 60000) * tf_ratio_adjustment)
+//     left_ts  = int(new_ob.start_t)
+//     right_ts = left_ts + delta_ms + 1
+
+//     cap_ms = int(max_ext_days * 1440 * 60000)
+//     if right_ts - left_ts > cap_ms
+//         right_ts := left_ts + cap_ms
+
+//     // nice label showing human TF (e.g., "1H", "D")
+//     label_tf = format_tf(tf_input_param)
+
+//     b = box.new(left_ts, new_ob.top, right_ts, new_ob.bottom,
+//              xloc = xloc.bar_time,
+//              border_color = border_unconf,
+//              bgcolor = new_ob.isBull ? bull_color : bear_color,
+//              text = (label_tf + _empty + _OBLabel + (new_ob.isBull ? _plus : _minus)),
+//              text_halign = text.align_right, text_valign = text.align_bottom,
+//              text_size = BoxLabelSize, text_color = OB_label_color)
+//     b
+
+// // ----------------------- Helper: enforce combined maxKeep_OBs (across TF1+TF2) -----------------------
+// enforce_combined_cap() =>
+//     total = f_ob_records_1.size() + f_ob_records_2.size()
+//     while total > maxKeep_OBs
+//         oldest_arr = 0
+//         oldest_t = 9223372036854775807
+//         if f_ob_records_1.size() > 0
+//             last1 = f_ob_records_1.get(f_ob_records_1.size() - 1)
+//             if last1.start_t < oldest_t
+//                 oldest_t := last1.start_t
+//                 oldest_arr := 1
+//         if f_ob_records_2.size() > 0
+//             last2 = f_ob_records_2.get(f_ob_records_2.size() - 1)
+//             if last2.start_t < oldest_t
+//                 oldest_t := last2.start_t
+//                 oldest_arr := 2
+//         if oldest_arr == 1
+//             oldBox = f_ob_areas_1.remove(f_ob_areas_1.size() - 1)
+//             if not na(oldBox)
+//                 box.delete(oldBox)
+//             f_ob_records_1.remove(f_ob_records_1.size() - 1)
+//         else if oldest_arr == 2
+//             oldBox2 = f_ob_areas_2.remove(f_ob_areas_2.size() - 1)
+//             if not na(oldBox2)
+//                 box.delete(oldBox2)
+//             f_ob_records_2.remove(f_ob_records_2.size() - 1)
+//         else
+//             break
+//         total := f_ob_records_1.size() + f_ob_records_2.size()
+
+// // ----------------------- Call detect_ob() on TF1 & TF2 via request.security -----------------------
+// [b1_found, b1_top, b1_bot, b1_isbull, b1_start_t, b1_formed_t] = request.security(syminfo.tickerid, tf_input_1, detect_ob(), lookahead = barmerge.lookahead_off)
+// [b2_found, b2_top, b2_bot, b2_isbull, b2_start_t, b2_formed_t] = request.security(syminfo.tickerid, tf_input_2, detect_ob(), lookahead = barmerge.lookahead_off)
+
+// // ----------------------- Handle TF1 OB (reconstruct & store) -----------------------
+// if b1_found and not na(b1_start_t)
+//     tmp1 = obtf.new(b1_top, b1_bot, b1_isbull, b1_start_t, b1_formed_t, false)
+//     if tmp1.start_t != t1
+//         b_created = create_ob_box_tf(tmp1, tf_input_1, cBull_box_tf1, cBear_box_tf1)
+//         f_ob_areas_1.unshift(b_created)
+//         f_ob_records_1.unshift(tmp1)
+//         t1 := tmp1.start_t
+//         enforce_combined_cap()
+
+// // ----------------------- Handle TF2 OB (reconstruct & store) -----------------------
+// if b2_found and not na(b2_start_t)
+//     tmp2 = obtf.new(b2_top, b2_bot, b2_isbull, b2_start_t, b2_formed_t, false)
+//     if tmp2.start_t != t2
+//         b_created2 = create_ob_box_tf(tmp2, tf_input_2, cBull_box_tf2, cBear_box_tf2)
+//         f_ob_areas_2.unshift(b_created2)
+//         f_ob_records_2.unshift(tmp2)
+//         t2 := tmp2.start_t
+//         enforce_combined_cap()
+
+// // ----------------------- HTF Confirmation by WICK (change box color) -----------------------
+// // TF1 confirmations
+// if f_ob_records_1.size() > 0
+//     for i = 0 to f_ob_records_1.size()-1
+//         rec = array.get(f_ob_records_1, i)
+//         area = array.get(f_ob_areas_1, i)
+//         if not rec.confirmed and time > rec.formed_t
+//             // Bullish OB: wick dipped below top then closed above top -> confirm
+//             if rec.isBull
+//                 if low < rec.top and close > rec.top
+//                     // set confirmed colors for TF1
+//                     if not na(area)
+//                         box.set_bgcolor(area, cBull_box_tf1_conf)
+//                         box.set_border_color(area, border_conf)
+//                     rec.confirmed := true
+//                     array.set(f_ob_records_1, i, rec)
+//             else
+//                 // Bear OB: wick pierced above bottom then closed below bottom -> confirm
+//                 if high > rec.bottom and close < rec.bottom
+//                     if not na(area)
+//                         box.set_bgcolor(area, cBear_box_tf1_conf)
+//                         box.set_border_color(area, border_conf)
+//                     rec.confirmed := true
+//                     array.set(f_ob_records_1, i, rec)
+
+// // TF2 confirmations
+// if f_ob_records_2.size() > 0
+//     for i = 0 to f_ob_records_2.size()-1
+//         rec = array.get(f_ob_records_2, i)
+//         area = array.get(f_ob_areas_2, i)
+//         if not rec.confirmed and time > rec.formed_t
+//             if rec.isBull
+//                 if low < rec.top and close > rec.top
+//                     if not na(area)
+//                         box.set_bgcolor(area, cBull_box_tf2_conf)
+//                         box.set_border_color(area, border_conf)
+//                     rec.confirmed := true
+//                     array.set(f_ob_records_2, i, rec)
+//             else
+//                 if high > rec.bottom and close < rec.bottom
+//                     if not na(area)
+//                         box.set_bgcolor(area, cBear_box_tf2_conf)
+//                         box.set_border_color(area, border_conf)
+//                     rec.confirmed := true
+//                     array.set(f_ob_records_2, i, rec)
+
+// // ----------------------- HTF Mitigation (delete when fully closed through) -----------------------
+// mitigated_count = 0
+// // iterate TF1 from oldest -> newest (remove safely)
+// if f_ob_records_1.size() > 0
+//     for i = f_ob_records_1.size()-1 to 0
+//         get = f_ob_records_1.get(i)
+//         area = f_ob_areas_1.get(i)
+//         if get.isBull
+//             if (not confirm_on_close and close < get.bottom) or (confirm_on_close and barstate.isconfirmed and close < get.bottom)
+//                 if not na(area)
+//                     box.delete(area)
+//                 f_ob_records_1.remove(i)
+//                 f_ob_areas_1.remove(i)
+//                 mitigated_count += 1
+//         else
+//             if (not confirm_on_close and close > get.top) or (confirm_on_close and barstate.isconfirmed and close > get.top)
+//                 if not na(area)
+//                     box.delete(area)
+//                 f_ob_records_1.remove(i)
+//                 f_ob_areas_1.remove(i)
+//                 mitigated_count += 1
+
+// // TF2 mitigation
+// if f_ob_records_2.size() > 0
+//     for i = f_ob_records_2.size()-1 to 0
+//         get = f_ob_records_2.get(i)
+//         area = f_ob_areas_2.get(i)
+//         if get.isBull
+//             if (not confirm_on_close and close < get.bottom) or (confirm_on_close and barstate.isconfirmed and close < get.bottom)
+//                 if not na(area)
+//                     box.delete(area)
+//                 f_ob_records_2.remove(i)
+//                 f_ob_areas_2.remove(i)
+//                 mitigated_count += 1
+//         else
+//             if (not confirm_on_close and close > get.top) or (confirm_on_close and barstate.isconfirmed and close > get.top)
+//                 if not na(area)
+//                     box.delete(area)
+//                 f_ob_records_2.remove(i)
+//                 f_ob_areas_2.remove(i)
+//                 mitigated_count += 1
+
+// // ensure combined cap still satisfied
+// enforce_combined_cap()
+
+// // ----------------------- Alerts -----------------------
+// bull_count_htf = 0
+// bear_count_htf = 0
+// if b1_found and not b1_found[1]
+//     if b1_isbull
+//         bull_count_htf += 1
+//     else
+//         bear_count_htf += 1
+// if b2_found and not b2_found[1]
+//     if b2_isbull
+//         bull_count_htf += 1
+//     else
+//         bear_count_htf += 1
+
+// alertcondition(bull_count_htf > 0, title='Bullish HTF OB', message='Bullish HTF Order Block detected')
+// alertcondition(bear_count_htf > 0, title='Bearish HTF OB', message='Bearish HTF Order Block detected')
+// alertcondition(mitigated_count > 0, title='HTF OB Mitigated', message='An HTF Order Block was mitigated (price closed through it)')
+
+
+
+
+
+
+
+// // ----------------------- Inputs -----------------------
+// classic_min_seq    = input.int(1, "Classic Minimum OB Series Length (min_seq)", minval=1, group='OB Settings')
+// classic_max_valid  = input.int(10, "Classic Maximum Series Validity (bars)", minval=1, group='OB Settings')
+// confirm_on_close   = input.bool(true, 'Only confirm on candle close', group='OB Settings')
+
+// extend             = input.int(20, 'Extend (units)*', minval = 0, group = 'OB Settings')
+// maxKeep_OBs        = input.int(8, "Max OBs to Display (chart TF)", minval=1, group='OB Settings')
+
+// // Safety cap: never extend more than this many days (prevents enormous boxes on Weekly/Monthly)
+// max_ext_days = input.int(50, "Max extension (days, cap)", minval=1, group='OB Settings')
+
+// // Higher TF inputs
+// tf_input_1 = input.timeframe('15', "OB Timeframe 1 (TF1)", group = 'HTF Settings')
+// tf_input_2 = input.timeframe('60', "OB Timeframe 2 (TF2)", group = 'HTF Settings')
+// maxKeep_OBs_HTF = input.int(5, "Max OBs to Display (per HTF)", minval=1, group='HTF Settings')
+
+// // HTF colors
+// cBull_box_tf1 = input.color(color.new(#089981, 80), "Bullish OB (TF1)", group='HTF Style')
+// cBear_box_tf1 = input.color(color.new(#f23655, 80), "Bearish OB (TF1)", group='HTF Style')
+// cBull_box_tf2 = input.color(color.new(#1eff8f, 80), "Bullish OB (TF2)", group='HTF Style')
+// cBear_box_tf2 = input.color(color.new(#f23675, 80), "Bearish OB (TF2)", group='HTF Style')
+
+// // Chart box colors (reintroduced)
+// cBull_box_unconf = input.color(color.new(#089981, 80), "Bullish OB (unconfirmed)", group='OB Style Settings')
+// cBull_box_conf   = input.color(color.new(#089981, 50), "Bullish OB (confirmed)", group='OB Style Settings')
+// cBear_box_unconf = input.color(color.new(#f23655, 80), "Bearish OB (unconfirmed)", group='OB Style Settings')
+// cBear_box_conf   = input.color(color.new(#f23655, 50), "Bearish OB (confirmed)", group='OB Style Settings')
+
+// border_unconf    = input.color(color.new(color.gray, 80), "Box Border (unconfirmed)", group='OB Style Settings')
+// border_conf      = input.color(color.new(color.gray, 30), "Box Border (confirmed)", group='OB Style Settings')
+
+// // label size
+// lblSize = input.string('Small', title='Label Size', options=['Tiny','Small','Normal'], group='OB Style Settings')
+// getLabelSize(s) => s == 'Tiny' ? size.tiny : s == 'Small' ? size.small : size.normal
+
+// // New Label Settings
+// OB_label_color    = input.color(color.rgb(186, 188, 196, 50), title = "Order Block Box Labels", group = "OB Style Settings")
+// box_label_size_input = input.string('Small', title = 'OB Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="OB Style Settings")
+// invis = color.new(#9b9c9b, 90)
+
+// GetBoxLabelSize(BoxLabelSize) =>
+//     BoxLabelSize == 'Tiny'  ? size.tiny  : BoxLabelSize == 'Small' ? size.small :BoxLabelSize == 'Normal'? size.normal: size.small
+
+// BoxLabelSize = GetBoxLabelSize(box_label_size_input)
+
+// var string _OBLabel = "OB"
+// var string _plus     = "+"
+// var string _minus    = "-"
+// var string _empty    = ""
+
+// n = bar_index
+// isBullBar = close > open
+// isBearBar = close < open
+// // ----------------------- Utilities (time math) -----------------------
+// f_tf_in_minutes(tf_str) =>
+//     S = str.upper(tf_str)
+//     nOnly = str.tonumber(S)
+//     if not na(nOnly)
+//         nOnly
+//     else
+//         last = str.substring(S, str.length(S) - 1, str.length(S))
+//         n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+//         last == "S" ? n / 60 :
+//          last == "H" ? n * 60 :
+//          last == "D" ? n * 1440 :
+//          last == "2D" ? n * 2880 :
+//          last == "W" ? n * 10080 :
+//          last == "2W" ? n * 20160 :
+//          last == "M" ? n * 43200 : na
+
+// // ----------------------- Types -----------------------
+// type srec
+//     int     start_time_ms
+//     int     start_idx
+//     int     first_time_ms
+//     float   first_high
+//     float   first_low
+//     float   series_high
+//     float   series_low
+//     int     len
+
+// type obrec
+//     box     b
+//     int     start_time_ms
+//     int     formed_time_ms
+//     int     start_idx
+//     int     formed_idx
+//     float   top
+//     float   bottom
+//     bool    isBull
+//     bool    confirmed
+
+// type obtf
+//     float top
+//     float bottom
+//     bool  isBull
+//     int   start_t
+//     int   formed_t
+
+// // ----------------------- Arrays -----------------------
+// var array<obrec> ob_list = array.new<obrec>()         // chart TF OBs (original behavior)
+// var array<srec> pending_bear = array.new<srec>()     // bearish sequences waiting for bullish reversal
+// var array<srec> pending_bull = array.new<srec>()     // bullish sequences waiting for bearish reversal
+
+// // HTF arrays (TF1)
+// var f_ob_records_1 = array.new<obtf>(0)
+// var f_ob_areas_1   = array.new<box>(0)
+// var t1 = 0
+
+// // HTF arrays (TF2)
+// var f_ob_records_2 = array.new<obtf>(0)
+// var f_ob_areas_2   = array.new<box>(0)
+// var t2 = 0
+
+// // ----------------------- Helper: clean pending arrays -----------------------
+// clean_pending(arr) =>
+//     if array.size(arr) > 0
+//         sz = array.size(arr)
+//         for j = 0 to sz - 1
+//             i = sz - 1 - j
+//             s = array.get(arr, i)
+//             // use the global bar_index 'n' to age-out entries (works on chart TF)
+//             if n - s.start_idx > classic_max_valid
+//                 array.remove(arr, i)
+
+// // ----------------------- Chart-TF sequence tracking (original behavior) -----------------------
+// var bool in_bear_series = false
+// var int  bear_start_time_ms = na
+// var int  bear_start_idx = na
+// var int  bear_len = 0
+// var float bear_series_high = na
+// var float bear_series_low = na
+// var float bear_first_high = na
+// var int  bear_first_time_ms = na
+
+// var bool in_bull_series = false
+// var int  bull_start_time_ms = na
+// var int  bull_start_idx = na
+// var int  bull_len = 0
+// var float bull_series_high = na
+// var float bull_series_low = na
+// var float bull_first_low = na
+// var int  bull_first_time_ms = na
+
+
+
+// // Build contiguous sequences. WHEN a sequence ends (opposite or neutral candle arrives) we push a pending record.
+// if isBearBar
+//     if not in_bear_series
+//         in_bear_series := true
+//         bear_start_time_ms := time
+//         bear_start_idx := n
+//         bear_first_time_ms := time
+//         bear_first_high := high
+//         bear_len := 1
+//         bear_series_high := high
+//         bear_series_low := low
+//     else
+//         bear_len += 1
+//         bear_series_high := math.max(bear_series_high, high)
+//         bear_series_low := math.min(bear_series_low, low)
+// else
+//     if in_bear_series
+//         rec = srec.new(bear_start_time_ms, bear_start_idx, bear_first_time_ms, bear_first_high, na, bear_series_high, bear_series_low, bear_len)
+//         array.unshift(pending_bear, rec)
+//         in_bear_series := false
+//         bear_len := 0
+
+// if isBullBar
+//     if not in_bull_series
+//         in_bull_series := true
+//         bull_start_time_ms := time
+//         bull_start_idx := n
+//         bull_first_time_ms := time
+//         bull_first_low := low
+//         bull_len := 1
+//         bull_series_high := high
+//         bull_series_low := low
+//     else
+//         bull_len += 1
+//         bull_series_high := math.max(bull_series_high, high)
+//         bull_series_low := math.min(bull_series_low, low)
+// else
+//     if in_bull_series
+//         recb = srec.new(bull_start_time_ms, bull_start_idx, bull_first_time_ms, na, bull_first_low, bull_series_high, bull_series_low, bull_len)
+//         array.unshift(pending_bull, recb)
+//         in_bull_series := false
+//         bull_len := 0
+
+// // Clean pending arrays
+// clean_pending(pending_bear)
+// clean_pending(pending_bull)
+
+// // ----------------------- HTF detection logic (runs inside request.security) -----------------------
+// // Return structure: [found_new_ob, out_top, out_bottom, out_isbull, out_start_t, out_formed_t]
+// detect_ob() =>
+//     bool out_found = false
+//     float out_top = na
+//     float out_bottom = na
+//     bool out_isbull = na
+//     int out_start_t = na
+//     int out_formed_t = na
+
+//     // Lookback window (TF bars)
+//     lookback = math.max(1, classic_max_valid + 2)
+//     // simple scan for runs followed by breakout
+//     for L = classic_min_seq to classic_max_valid
+//         for end_off = 1 to lookback
+//             start_off = end_off + L - 1
+//             if start_off > lookback
+//                 continue
+//             // check bearish run
+//             all_bear = true
+//             for t = start_off to end_off
+//                 if not (close[t] < open[t])
+//                     all_bear := false
+//             if all_bear
+//                 first_high_val = high[start_off]
+//                 series_high_val = high[end_off]
+//                 series_low_val = low[end_off]
+//                 if close > open and close > first_high_val
+//                     out_found := true
+//                     out_top := series_high_val
+//                     out_bottom := series_low_val
+//                     out_isbull := true
+//                     out_start_t := int(time[start_off])
+//                     out_formed_t := int(time)
+//                     break
+//             // check bullish run
+//             all_bull = true
+//             for t2 = start_off to end_off
+//                 if not (close[t2] > open[t2])
+//                     all_bull := false
+//             if all_bull
+//                 first_low_val = low[start_off]
+//                 series_high_val2 = high[end_off]
+//                 series_low_val2 = low[end_off]
+//                 if close < open and close < first_low_val
+//                     out_found := true
+//                     out_top := series_high_val2
+//                     out_bottom := series_low_val2
+//                     out_isbull := false
+//                     out_start_t := int(time[start_off])
+//                     out_formed_t := int(time)
+//                     break
+//         if out_found
+//             break
+
+//     [out_found, out_top, out_bottom, out_isbull, out_start_t, out_formed_t]
+
+// // ----------------------- HTF box creation (timestamp-based) -----------------------
+// create_ob_box_tf(new_ob, tf_input_param, bull_color, bear_color) =>
+//     tf_minutes       = f_tf_in_minutes(tf_input_param)
+//     chart_tf_minutes = f_tf_in_minutes(timeframe.period)
+//     extend_minutes = extend * chart_tf_minutes
+
+//     tf_ratio = math.round((tf_minutes / (chart_tf_minutes + 0.001)))
+//     tf_ratio_adjustment = 1
+//     if tf_ratio > 200
+//         tf_ratio_adjustment := 4
+//     if tf_ratio > 1000
+//         tf_ratio_adjustment := 6
+
+//     delta_ms = int(math.round(extend_minutes * 60000) * tf_ratio_adjustment)
+//     left_ts  = int(new_ob.start_t)
+//     right_ts = left_ts + delta_ms + 1
+
+//     cap_ms = int(max_ext_days * 1440 * 60000)
+//     if right_ts - left_ts > cap_ms
+//         right_ts := left_ts + cap_ms
+
+//     box.new(left_ts, new_ob.top, right_ts, new_ob.bottom,
+//              xloc = xloc.bar_time,
+//              border_color = border_unconf,
+//              bgcolor = new_ob.isBull ? bull_color : bear_color,
+//              text = (str.tostring(tf_input_param) + _empty + _OBLabel + (new_ob.isBull ? _plus : _minus)),
+//              text_halign = text.align_right, text_valign = text.align_bottom,
+//              text_size = BoxLabelSize, text_color = OB_label_color)
+
+// // ----------------------- Call detect_ob() on TF1 & TF2 via request.security -----------------------
+// [b1_found, b1_top, b1_bot, b1_isbull, b1_start_t, b1_formed_t] = request.security(syminfo.tickerid, tf_input_1, detect_ob(), lookahead = barmerge.lookahead_off)
+// [b2_found, b2_top, b2_bot, b2_isbull, b2_start_t, b2_formed_t] = request.security(syminfo.tickerid, tf_input_2, detect_ob(), lookahead = barmerge.lookahead_off)
+
+// // Reconstruct and handle TF1 OB
+// if b1_found and not na(b1_start_t)
+//     tmp1 = obtf.new(b1_top, b1_bot, b1_isbull, b1_start_t, b1_formed_t)
+//     if tmp1.start_t != t1
+//         create_ob_box_tf(tmp1, tf_input_1, cBull_box_tf1, cBear_box_tf1)
+//         f_ob_records_1.unshift(tmp1)
+//         // create box separately and store (we created a box but did not keep it - create and keep)
+//         b_created = create_ob_box_tf(tmp1, tf_input_1, cBull_box_tf1, cBear_box_tf1)
+//         f_ob_areas_1.unshift(b_created)
+//         if f_ob_records_1.size() > maxKeep_OBs_HTF
+//             idx = f_ob_records_1.size() - 1
+//             f_ob_records_1.remove(idx)
+//             oldBox = f_ob_areas_1.remove(idx)
+//             oldBox.delete()
+//         t1 := tmp1.start_t
+
+// // Reconstruct and handle TF2 OB
+// if b2_found and not na(b2_start_t)
+//     tmp2 = obtf.new(b2_top, b2_bot, b2_isbull, b2_start_t, b2_formed_t)
+//     if tmp2.start_t != t2
+//         b_created2 = create_ob_box_tf(tmp2, tf_input_2, cBull_box_tf2, cBear_box_tf2)
+//         f_ob_areas_2.unshift(b_created2)
+//         f_ob_records_2.unshift(tmp2)
+//         if f_ob_records_2.size() > maxKeep_OBs_HTF
+//             idx2 = f_ob_records_2.size() - 1
+//             f_ob_records_2.remove(idx2)
+//             oldBox2 = f_ob_areas_2.remove(idx2)
+//             oldBox2.delete()
+//         t2 := tmp2.start_t
+
+// // ----------------------- HTF Mitigation (delete when fully closed through) -----------------------
+// if f_ob_records_1.size() > 0
+//     for i = f_ob_records_1.size()-1 to 0
+//         get = f_ob_records_1.get(i)
+//         area = f_ob_areas_1.get(i)
+//         if get.isBull
+//             if close < get.bottom
+//                 area.delete()
+//                 f_ob_records_1.remove(i)
+//                 f_ob_areas_1.remove(i)
+//         else
+//             if close > get.top
+//                 area.delete()
+//                 f_ob_records_1.remove(i)
+//                 f_ob_areas_1.remove(i)
+
+// if f_ob_records_2.size() > 0
+//     for i = f_ob_records_2.size()-1 to 0
+//         get = f_ob_records_2.get(i)
+//         area = f_ob_areas_2.get(i)
+//         if get.isBull
+//             if close < get.bottom
+//                 area.delete()
+//                 f_ob_records_2.remove(i)
+//                 f_ob_areas_2.remove(i)
+//         else
+//             if close > get.top
+//                 area.delete()
+//                 f_ob_records_2.remove(i)
+//                 f_ob_areas_2.remove(i)
+
+// // ----------------------- Alerts (simple aggregated) -----------------------
+// bull_confirmed_any = false
+// bear_confirmed_any = false
+
+// if array.size(ob_list) > 0
+//     for j = 0 to array.size(ob_list)-1
+//         r = array.get(ob_list, j)
+//         if r.confirmed and r.isBull
+//             bull_confirmed_any := true
+//         if r.confirmed and not r.isBull
+//             bear_confirmed_any := true
+
+// var int bull_count_htf = 0
+// var int bear_count_htf = 0
+// // if a new HTF OB appeared on this bar increment counts (simple heuristic)
+// if b1_found and b1_found[1] == false
+//     if b1_isbull
+//         bull_count_htf += 1
+//     else
+//         bear_count_htf += 1
+// if b2_found and b2_found[1] == false
+//     if b2_isbull
+//         bull_count_htf += 1
+//     else
+//         bear_count_htf += 1
+
+// alertcondition(bull_confirmed_any or (bull_count_htf > 0), title='Bull OB Confirmed (any TF)', message='Bullish Order Block detected/confirmed on one of the TFs')
+// alertcondition(bear_confirmed_any or (bear_count_htf > 0), title='Bear OB Confirmed (any TF)', message='Bearish Order Block detected/confirmed on one of the TFs')
+
+// var int prev_htf1_size = 0
+// var int prev_htf2_size = 0
+// htf1_mitigated = prev_htf1_size - f_ob_records_1.size() > 0
+// htf2_mitigated = prev_htf2_size - f_ob_records_2.size() > 0
+// alertcondition(htf1_mitigated or htf2_mitigated, title='HTF OB Mitigated', message='An HTF Order Block was mitigated (price closed through it)')
+
+// prev_htf1_size := f_ob_records_1.size()
+// prev_htf2_size := f_ob_records_2.size()
+
+
+
+
