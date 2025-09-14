@@ -1,0 +1,793 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/create_ob_box$0
+// © Sax
+
+
+//@version=5
+indicator("Order Blocks v1", shorttitle="Order Blocks v1", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ----------------------- Inputs -----------------------
+classic_min_seq    = input.int(1, "Classic Minimum OB Series Length (min_seq)", minval=1, group='OB Settings')
+classic_max_valid  = input.int(10, "Classic Maximum Series Validity (bars)", minval=1, group='OB Settings')
+confirm_on_close   = input.bool(true, 'Only confirm on candle close', group='OB Settings')
+
+extend             = input.int(20, 'Extend (units)*', minval = 0, group = 'OB Settings')
+// extend_dynamic     = input.bool(true, 'Scale extend by chart TF minutes', group='OB Settings')
+maxKeep_OBs        = input.int(8, "Max OBs to Display", minval=1, group='OB Settings')
+
+// Safety cap: never extend more than this many days (prevents enormous boxes on Weekly/Monthly)
+max_ext_days = input.int(50, "Max extension (days, cap)", minval=1, group='OB Settings')
+
+// Colors / style
+cBull_box_unconf = input.color(color.new(#089981, 80), "Bullish OB (unconfirmed)", group='OB Style Settings')
+cBull_box_conf   = input.color(color.new(#089981, 50), "Bullish OB (confirmed)", group='OB Style Settings')
+cBear_box_unconf = input.color(color.new(#f23655, 80), "Bearish OB (unconfirmed)", group='OB Style Settings')
+cBear_box_conf   = input.color(color.new(#f23655, 50), "Bearish OB (confirmed)", group='OB Style Settings')
+border_unconf    = input.color(color.new(color.gray, 80), "Box Border (unconfirmed)", group='OB Style Settings')
+border_conf      = input.color(color.new(color.gray, 30), "Box Border (confirmed)", group='OB Style Settings')
+
+
+// label size
+lblSize = input.string('Small', title='Label Size', options=['Tiny','Small','Normal'], group='OB Style Settings')
+getLabelSize(s) => s == 'Tiny' ? size.tiny : s == 'Small' ? size.small : size.normal
+
+// New Label Settings
+OB_label_color    = input.color(color.rgb(186, 188, 196, 50), title = "Order Block Box Labels", group = "OB Style Settings")
+box_label_size_input = input.string('Small', title = 'OB Box Label Size', options = ['Tiny', 'Small', 'Normal'], group ="OB Style Settings")
+invis = color.new(#9b9c9b, 90)
+
+// Function to convert user selection into size
+GetBoxLabelSize(BoxLabelSize) =>
+    BoxLabelSize == 'Tiny'  ? size.tiny  : BoxLabelSize == 'Small' ? size.small :BoxLabelSize == 'Normal'? size.normal: size.small  // Default
+// Convert size settings string into actual size
+BoxLabelSize = GetBoxLabelSize(box_label_size_input)
+
+
+var string _OBLabel = "OB"
+var string _plus     = "+"
+var string _minus    = "-"
+var string _empty    = ""
+
+
+// ----------------------- Utilities (time math) -----------------------
+f_tf_in_minutes(tf_str) =>
+    S = str.upper(tf_str)
+    nOnly = str.tonumber(S)
+    if not na(nOnly)
+        nOnly
+    else
+        last = str.substring(S, str.length(S) - 1, str.length(S))
+        n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+        last == "S" ? n / 60 :
+         last == "H" ? n * 60 :
+         last == "D" ? n * 1440 :
+         last == "2D" ? n * 2880 :
+         last == "W" ? n * 10080 :
+         last == "2W" ? n * 20160 :
+         last == "M" ? n * 43200 : na
+
+// create a timestamp-based box similar to your FVG style
+create_ob_box(left_idx, top, bottom, isBull) =>
+    // minutes per chart bar
+    chart_tf_min = f_tf_in_minutes(timeframe.period)
+    // convert extend (minutes-based when extend_dynamic true) into number-of-bars
+    // ext_minutes = extend * (extend_dynamic ? chart_tf_min : 1)
+    ext_minutes = extend * chart_tf_min  // ext_minutes = extend * (extend_dynamic ? chart_tf_min : 1)
+    // avoid divide-by-zero
+    bars_equiv = chart_tf_min > 0 ? int(math.round(ext_minutes / chart_tf_min)) : extend
+    if bars_equiv < 1
+        bars_equiv := 1
+
+    // Cap bars to prevent huge boxes: compute cap in bars using max_ext_days
+    // cap_bars = max_ext_days days -> convert to bars (max_ext_days * 1440 minutes / chart_tf_min)
+    cap_bars = chart_tf_min > 0 ? int(math.max(1, math.round((max_ext_days * 1440) / chart_tf_min))) : 1000
+    if bars_equiv > cap_bars
+        bars_equiv := cap_bars
+
+    // Compute right index and also cap it relative to the current bar_index to avoid far-future stretches
+    desired_right_idx = left_idx + bars_equiv
+    // Prevent going beyond now + cap_bars
+    max_future_idx = bar_index + cap_bars
+    right_idx = desired_right_idx
+    if right_idx > max_future_idx
+        right_idx := max_future_idx
+    if right_idx <= left_idx
+        right_idx := left_idx + 1
+
+    // create box using bar_index coordinates
+    b = box.new(left_idx, top, right_idx, bottom,
+             xloc = xloc.bar_index,
+             border_color = border_unconf,
+             bgcolor = isBull ? cBull_box_unconf : cBear_box_unconf,
+             text = (_OBLabel + (isBull ? _plus : _minus)),
+             text_halign = text.align_right, text_valign = text.align_bottom,
+             text_size = BoxLabelSize, text_color = OB_label_color)
+    b
+
+// ----------------------- UDTs -----------------------
+type obrec
+    box     b
+    int     start_time_ms
+    int     formed_time_ms
+    int     start_idx
+    int     formed_idx        // <-- new: bar index when OB formed
+    float   top
+    float   bottom
+    bool    isBull
+    bool    confirmed
+
+type srec
+    int     start_time_ms
+    int     start_idx
+    int     first_time_ms
+    float   first_high
+    float   first_low
+    float   series_high
+    float   series_low
+    int     len
+
+// ----------------------- Arrays -----------------------
+var array<obrec> ob_list = array.new<obrec>()
+var array<srec> pending_bear = array.new<srec>()  // bearish sequences waiting for bullish reversal
+var array<srec> pending_bull = array.new<srec>()  // bullish sequences waiting for bearish reversal
+
+// ----------------------- Sequence tracking (consecutive candles only) -----------------------
+var bool in_bear_series = false
+var int  bear_start_time_ms = na
+var int  bear_start_idx = na
+var int  bear_len = 0
+var float bear_series_high = na
+var float bear_series_low = na
+var float bear_first_high = na
+var int  bear_first_time_ms = na
+
+var bool in_bull_series = false
+var int  bull_start_time_ms = na
+var int  bull_start_idx = na
+var int  bull_len = 0
+var float bull_series_high = na
+var float bull_series_low = na
+var float bull_first_low = na
+var int  bull_first_time_ms = na
+
+n = bar_index
+isBullBar = close > open
+isBearBar = close < open
+
+// Build contiguous sequences. WHEN a sequence ends (opposite or neutral candle arrives) we push a pending record.
+if isBearBar
+    if not in_bear_series
+        in_bear_series := true
+        bear_start_time_ms := time
+        bear_start_idx := n
+        bear_first_time_ms := time
+        bear_first_high := high
+        bear_len := 1
+        bear_series_high := high
+        bear_series_low := low
+    else
+        bear_len += 1
+        bear_series_high := math.max(bear_series_high, high)
+        bear_series_low := math.min(bear_series_low, low)
+else
+    if in_bear_series
+        rec = srec.new(bear_start_time_ms, bear_start_idx, bear_first_time_ms, bear_first_high, na, bear_series_high, bear_series_low, bear_len)
+        array.unshift(pending_bear, rec)
+        in_bear_series := false
+        bear_len := 0
+
+if isBullBar
+    if not in_bull_series
+        in_bull_series := true
+        bull_start_time_ms := time
+        bull_start_idx := n
+        bull_first_time_ms := time
+        bull_first_low := low
+        bull_len := 1
+        bull_series_high := high
+        bull_series_low := low
+    else
+        bull_len += 1
+        bull_series_high := math.max(bull_series_high, high)
+        bull_series_low := math.min(bull_series_low, low)
+else
+    if in_bull_series
+        recb = srec.new(bull_start_time_ms, bull_start_idx, bull_first_time_ms, na, bull_first_low, bull_series_high, bull_series_low, bull_len)
+        array.unshift(pending_bull, recb)
+        in_bull_series := false
+        bull_len := 0
+
+// ----------------------- Clean pending arrays safely (fixes negative step) -----------------------
+clean_pending(arr) =>
+    if array.size(arr) > 0
+        sz = array.size(arr)
+        // iterate forward over a counter and compute the backward index to inspect newest->oldest
+        for j = 0 to sz - 1
+            i = sz - 1 - j
+            s = array.get(arr, i)
+            if n - s.start_idx > classic_max_valid
+                array.remove(arr, i)
+
+clean_pending(pending_bear)
+clean_pending(pending_bull)
+
+// ----------------------- Formation: when an opposite-direction close appears, check most-recent pending series -----------------------
+if (not confirm_on_close and isBullBar) or (confirm_on_close and barstate.isconfirmed and isBullBar)
+    if array.size(pending_bear) > 0
+        for i = 0 to array.size(pending_bear)-1
+            s = array.get(pending_bear, i)
+            if n - s.start_idx > classic_max_valid
+                continue
+            if s.len >= classic_min_seq and not na(s.first_high)
+                if close > s.first_high
+                    left_idx = s.start_idx
+                    top = s.series_high
+                    bottom = s.series_low
+                    b = create_ob_box(left_idx, top, bottom, true)
+                    // store formed_idx as current bar index
+                    rec = obrec.new(b, int(s.start_time_ms), int(time), s.start_idx, n, top, bottom, true, false)
+                    array.unshift(ob_list, rec)
+                    array.remove(pending_bear, i)
+                    if array.size(ob_list) > maxKeep_OBs
+                        last = array.get(ob_list, array.size(ob_list)-1)
+                        if not na(last.b)
+                            last.b.delete()
+                        array.remove(ob_list, array.size(ob_list)-1)
+                    break
+
+if (not confirm_on_close and isBearBar) or (confirm_on_close and barstate.isconfirmed and isBearBar)
+    if array.size(pending_bull) > 0
+        for i = 0 to array.size(pending_bull)-1
+            s = array.get(pending_bull, i)
+            if n - s.start_idx > classic_max_valid
+                continue
+            if s.len >= classic_min_seq and not na(s.first_low)
+                if close < s.first_low
+                    left_idx = s.start_idx
+                    top = s.series_high
+                    bottom = s.series_low
+                    b = create_ob_box(left_idx, top, bottom, false)
+                    rec = obrec.new(b, int(s.start_time_ms), int(time), s.start_idx, n, top, bottom, false, false)
+                    array.unshift(ob_list, rec)
+                    array.remove(pending_bull, i)
+                    if array.size(ob_list) > maxKeep_OBs
+                        last = array.get(ob_list, array.size(ob_list)-1)
+                        if not na(last.b)
+                            last.b.delete()
+                        array.remove(ob_list, array.size(ob_list)-1)
+                    break
+
+// ----------------------- Confirmations (wick-only test) and Mitigation (full close through) -----------------------
+if array.size(ob_list) > 0
+    sz = array.size(ob_list)
+    for j = 0 to sz - 1
+        i = sz - 1 - j  // iterate newest → oldest safely
+        rec = array.get(ob_list, i)
+        if na(rec.b)
+            array.remove(ob_list, i)
+            continue
+
+        box_top = rec.top
+        box_bot = rec.bottom
+
+        if not rec.confirmed
+            if time > rec.formed_time_ms
+                if not confirm_on_close or barstate.isconfirmed
+                    if rec.isBull
+                        if low < box_top and close > box_top
+                            box.set_bgcolor(rec.b, cBull_box_conf)
+                            box.set_border_color(rec.b, border_conf)
+                            rec.confirmed := true
+                            mid_ts = int(math.round((rec.start_time_ms + rec.formed_time_ms) / 2))
+                            // label.new(mid_ts, box_top, text='Bull OB', xloc = xloc.bar_time, style=label.style_label_down, color=na, textcolor=color.white, size=getLabelSize(lblSize))  // debug
+                    else
+                        if high > box_bot and close < box_bot
+                            box.set_bgcolor(rec.b, cBear_box_conf)
+                            box.set_border_color(rec.b, border_conf)
+                            rec.confirmed := true
+                            mid_ts = int(math.round((rec.start_time_ms + rec.formed_time_ms) / 2))
+                            // label.new(mid_ts, box_bot, text='Bear OB', xloc = xloc.bar_time, style=label.style_label_up, color=na, textcolor=color.white, size=getLabelSize(lblSize))   // debug
+            array.set(ob_list, i, rec)
+
+        // Mitigation: full close through (delete & remove)
+        if rec.isBull
+            if (not confirm_on_close and close < box_bot) or (confirm_on_close and barstate.isconfirmed and close < box_bot)
+                rec.b.delete()
+                array.remove(ob_list, i)
+        else
+            if (not confirm_on_close and close > box_top) or (confirm_on_close and barstate.isconfirmed and close > box_top)
+                rec.b.delete()
+                array.remove(ob_list, i)
+
+// ----------------------- Alerts -----------------------
+bull_ob_confirmed = false
+bear_ob_confirmed = false
+if array.size(ob_list) > 0
+    for j = 0 to array.size(ob_list)-1
+        r = array.get(ob_list, j)
+        if r.confirmed and r.isBull
+            bull_ob_confirmed := true
+        if r.confirmed and not r.isBull
+            bear_ob_confirmed := true
+
+alertcondition(bull_ob_confirmed and not bull_ob_confirmed[1], title='Bull OB Confirmed', message='Bullish Order Block confirmed')
+alertcondition(bear_ob_confirmed and not bear_ob_confirmed[1], title='Bear OB Confirmed', message='Bearish Order Block confirmed')
+
+
+
+
+
+
+
+
+// VERSION 2:  PRETTY DAMN GOOD. REQUIRES SOME OB Detection Logic Revision
+
+// // ----------------------- Inputs -----------------------
+// classic_min_seq    = input.int(1, "Classic Minimum OB Series Length (min_seq)", minval=1, group='Classic Settings')
+// classic_max_valid  = input.int(50, "Classic Maximum Series Validity (bars)", minval=1, group='Classic Settings')
+// confirm_on_close   = input.bool(true, 'Only confirm on candle close', group='Style')
+
+// extend             = input.int(20, 'Extend (units)*', minval = 0, group = 'Box Settings')
+// extend_dynamic     = input.bool(true, 'Scale extend by chart TF minutes', group='Box Settings') // similar to FVG scaling
+// maxKeep_OBs        = input.int(8, "Max OBs to Display", minval=1, group='Box Settings')
+
+// // Colors / style
+// cBull_box_unconf = input.color(color.new(#089981, 80), "Bullish OB (unconfirmed)", group='Style')
+// cBull_box_conf   = input.color(color.new(#089981, 50), "Bullish OB (confirmed)", group='Style')
+// cBear_box_unconf = input.color(color.new(#f23655, 80), "Bearish OB (unconfirmed)", group='Style')
+// cBear_box_conf   = input.color(color.new(#f23655, 50), "Bearish OB (confirmed)", group='Style')
+// border_unconf    = input.color(color.new(color.gray, 80), "Box Border (unconfirmed)", group='Style')
+// border_conf      = input.color(color.new(color.gray, 30), "Box Border (confirmed)", group='Style')
+
+// // label size
+// lblSize = input.string('Small', title='Label Size', options=['Tiny','Small','Normal'], group='Style')
+// getLabelSize(s) => s == 'Tiny' ? size.tiny : s == 'Small' ? size.small : size.normal
+
+// // ----------------------- Utilities (time math) -----------------------
+// f_tf_in_minutes(tf_str) =>
+//     S = str.upper(tf_str)
+//     nOnly = str.tonumber(S)
+//     if not na(nOnly)
+//         nOnly
+//     else
+//         last = str.substring(S, str.length(S) - 1, str.length(S))
+//         n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+//         last == "S" ? n / 60 :
+//          last == "H" ? n * 60 :
+//          last == "D" ? n * 1440 :
+//          last == "W" ? n * 10080 :
+//          last == "M" ? n * 43200 : na
+
+// // create a timestamp-based box similar to your FVG style
+// create_ob_box(left_time_ms, top, bottom, isBull) =>
+//     // chart TF minutes
+//     chart_tf_min = f_tf_in_minutes(timeframe.period)
+//     // extension minutes (scale by chart tf if desired)
+//     ext_minutes = extend * (extend_dynamic ? math.max(1, chart_tf_min) : 1)
+//     delta_ms = int(math.round(ext_minutes * 60000))
+//     right_ts = left_time_ms + delta_ms + 1
+//     b = box.new(left_time_ms, top, right_ts, bottom,
+//              xloc = xloc.bar_time,
+//              border_color = border_unconf,
+//              bgcolor = isBull ? cBull_box_unconf : cBear_box_unconf)
+//     b
+
+// // ----------------------- UDT: OB record -----------------------
+// type obrec
+//     box     b
+//     int     start_time_ms
+//     int     formed_time_ms
+//     float   top
+//     float   bottom
+//     bool    isBull
+//     bool    confirmed
+
+// // ----------------------- Arrays -----------------------
+// var array<obrec> ob_list = array.new<obrec>()
+
+// // ----------------------- Sequence tracking (store timestamps, not historic indexing) -----------------------
+// var bool in_bear_series = false
+// var int  bear_start_time_ms = na
+// var int  bear_len = 0
+// var float bear_series_high = na
+// var float bear_series_low = na
+// var float bear_first_high = na
+// var int  bear_first_time_ms = na
+
+// var bool in_bull_series = false
+// var int  bull_start_time_ms = na
+// var int  bull_len = 0
+// var float bull_series_high = na
+// var float bull_series_low = na
+// var float bull_first_low = na
+// var int  bull_first_time_ms = na
+
+// isBullBar = close > open
+// isBearBar = close < open
+
+// // Update sequences each bar: store `time` (ms) at sequence start & first candle extremes
+// if isBearBar
+//     if not in_bear_series
+//         in_bear_series := true
+//         bear_start_time_ms := time
+//         bear_first_time_ms := time
+//         bear_first_high := high
+//         bear_len := 1
+//         bear_series_high := high
+//         bear_series_low := low
+//     else
+//         bear_len += 1
+//         bear_series_high := math.max(bear_series_high, high)
+//         bear_series_low := math.min(bear_series_low, low)
+// else
+//     if in_bear_series
+//         if bar_index -  (bar_index - bear_len)  > classic_max_valid  // cheap check to keep life manageable
+//             // expire if series too old (we avoid huge history indexing)
+//             in_bear_series := false
+//             bear_len := 0
+
+// if isBullBar
+//     if not in_bull_series
+//         in_bull_series := true
+//         bull_start_time_ms := time
+//         bull_first_time_ms := time
+//         bull_first_low := low
+//         bull_len := 1
+//         bull_series_high := high
+//         bull_series_low := low
+//     else
+//         bull_len += 1
+//         bull_series_high := math.max(bull_series_high, high)
+//         bull_series_low := math.min(bull_series_low, low)
+// else
+//     if in_bull_series
+//         if bar_index - (bar_index - bull_len) > classic_max_valid
+//             in_bull_series := false
+//             bull_len := 0
+
+// // ----------------------- Formation: detect reversal that forms OB (timestamp-based) -----------------------
+// // Bullish OB (bear series then bullish close beyond first bear candle's high)
+// if in_bear_series
+//     if (not confirm_on_close and isBullBar) or (confirm_on_close and barstate.isconfirmed and isBullBar)
+//         if close > bear_first_high and bear_len >= classic_min_seq
+//             left_ts = int(bear_start_time_ms)
+//             top = bear_series_high
+//             bottom = bear_series_low
+//             b = create_ob_box(left_ts, top, bottom, true)
+//             rec = obrec.new(b, left_ts, int(time), top, bottom, true, false)
+//             array.unshift(ob_list, rec)
+//             // limit stored boxes
+//             if array.size(ob_list) > maxKeep_OBs
+//                 last = array.get(ob_list, array.size(ob_list)-1)
+//                 if not na(last.b)
+//                     last.b.delete()
+//                 array.remove(ob_list, array.size(ob_list)-1)
+//             // reset series
+//             in_bear_series := false
+//             bear_len := 0
+
+// // Bearish OB (bull series then bearish close below first bull candle's low)
+// if in_bull_series
+//     if (not confirm_on_close and isBearBar) or (confirm_on_close and barstate.isconfirmed and isBearBar)
+//         if close < bull_first_low and bull_len >= classic_min_seq
+//             left_ts = int(bull_start_time_ms)
+//             top = bull_series_high
+//             bottom = bull_series_low
+//             b = create_ob_box(left_ts, top, bottom, false)
+//             rec = obrec.new(b, left_ts, int(time), top, bottom, false, false)
+//             array.unshift(ob_list, rec)
+//             if array.size(ob_list) > maxKeep_OBs
+//                 last = array.get(ob_list, array.size(ob_list)-1)
+//                 if not na(last.b)
+//                     last.b.delete()
+//                 array.remove(ob_list, array.size(ob_list)-1)
+//             in_bull_series := false
+//             bull_len := 0
+
+// // ----------------------- Confirmations (wick-only test) and Mitigation (full close through) -----------------------
+// if array.size(ob_list) > 0
+//     for i = array.size(ob_list) - 1 to 0
+//         rec = array.get(ob_list, i)
+//         if na(rec.b)
+//             array.remove(ob_list, i)
+//             continue
+
+//         box_top = rec.top
+//         box_bot = rec.bottom
+
+//         // Confirmation (test) only after formation bar
+//         if not rec.confirmed
+//             if time > rec.formed_time_ms
+//                 if not confirm_on_close or barstate.isconfirmed
+//                     if rec.isBull
+//                         // Wick dips into box (low < top) but candle closes above the top => wick-only test then close outside
+//                         if low < box_top and close > box_top
+//                             box.set_bgcolor(rec.b, cBull_box_conf)
+//                             box.set_border_color(rec.b, border_conf)
+//                             rec.confirmed := true
+//                             // place label at mid-time
+//                             mid_ts = int(math.round((rec.start_time_ms + rec.formed_time_ms) / 2))
+//                             label.new(mid_ts, box_top, text='Bull OB', xloc = xloc.bar_time, style=label.style_label_down, color=na, textcolor=color.white, size=getLabelSize(lblSize))
+//                     else
+//                         if high > box_bot and close < box_bot
+//                             box.set_bgcolor(rec.b, cBear_box_conf)
+//                             box.set_border_color(rec.b, border_conf)
+//                             rec.confirmed := true
+//                             mid_ts = int(math.round((rec.start_time_ms + rec.formed_time_ms) / 2))
+//                             label.new(mid_ts, box_bot, text='Bear OB', xloc = xloc.bar_time, style=label.style_label_up, color=na, textcolor=color.white, size=getLabelSize(lblSize))
+//             array.set(ob_list, i, rec)
+
+//         // Mitigation: full close through (delete box & remove)
+//         if rec.isBull
+//             if (not confirm_on_close and close < box_bot) or (confirm_on_close and barstate.isconfirmed and close < box_bot)
+//                 // delete & remove
+//                 rec.b.delete()
+//                 array.remove(ob_list, i)
+//         else
+//             if (not confirm_on_close and close > box_top) or (confirm_on_close and barstate.isconfirmed and close > box_top)
+//                 rec.b.delete()
+//                 array.remove(ob_list, i)
+
+// // ----------------------- Alerts -----------------------
+// bull_ob_confirmed = false
+// bear_ob_confirmed = false
+// if array.size(ob_list) > 0
+//     for j = 0 to array.size(ob_list)-1
+//         r = array.get(ob_list, j)
+//         if r.confirmed and r.isBull
+//             bull_ob_confirmed := true
+//         if r.confirmed and not r.isBull
+//             bear_ob_confirmed := true
+
+// alertcondition(bull_ob_confirmed and not bull_ob_confirmed[1], title='Bull OB Confirmed', message='Bullish Order Block confirmed')
+// alertcondition(bear_ob_confirmed and not bear_ob_confirmed[1], title='Bear OB Confirmed', message='Bearish Order Block confirmed')
+
+
+
+
+// //@version=5
+// indicator("Order Blocks v1", shorttitle="Order Blocks v1", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// // ----------------------- Inputs -----------------------
+// classic_min_seq    = input.int(1, "Classic Minimum OB Series Length (min_seq)", minval=1, group='Classic Settings')
+// classic_max_valid  = input.int(50, "Classic Maximum Series Validity (bars)", minval=1, group='Classic Settings')
+// confirm_on_close   = input.bool(true, 'Only confirm on candle close', group='Style')
+
+// extend             = input.int(20, 'Extend (bars for box)', minval = 0, group = 'Box Settings')
+// extend_dynamic     = input.bool(false, 'Extend scaled by chart TF (approx)', group='Box Settings')
+// maxKeep_OBs        = input.int(8, "Max OBs to Display", minval=1, group='Box Settings')
+
+// // Colors / style
+// cBull_box_unconf = input.color(color.new(color.green, 80), "Bullish OB (unconfirmed)", group='Style')
+// cBull_box_conf   = input.color(color.new(color.green, 50), "Bullish OB (confirmed)", group='Style')
+// cBear_box_unconf = input.color(color.new(color.red, 80), "Bearish OB (unconfirmed)", group='Style')
+// cBear_box_conf   = input.color(color.new(color.red, 50), "Bearish OB (confirmed)", group='Style')
+// border_unconf    = input.color(color.new(color.gray, 80), "Box Border (unconfirmed)", group='Style')
+// border_conf      = input.color(color.new(color.gray, 30), "Box Border (confirmed)", group='Style')
+
+// // label size
+// lblSize = input.string('Small', title='Label Size', options=['Tiny','Small','Normal'], group='Style')
+// getLabelSize(s) => s == 'Tiny' ? size.tiny : s == 'Small' ? size.small : size.normal
+
+// // ----------------------- Utilities -----------------------
+// f_tf_in_minutes(tf_str) =>
+//     S = str.upper(tf_str)
+//     nOnly = str.tonumber(S)
+//     if not na(nOnly)
+//         nOnly
+//     else
+//         last = str.substring(S, str.length(S) - 1, str.length(S))
+//         n    = str.tonumber(str.substring(S, 0, str.length(S) - 1))
+//         last == "S" ? n / 60 :
+//          last == "H" ? n * 60 :
+//          last == "D" ? n * 1440 :
+//          last == "W" ? n * 10080 :
+//          last == "M" ? n * 43200 : na
+
+// // convert an index to timestamp (bar time)
+// // bar_index_to_time(idx) =>
+// //     // chart has series time[] so we locate time by offset: time[idx] isn't available, but chart.point.from_index(...) used earlier. Simpler: store left_ts using time when we capture start.
+// //     na
+
+// // ----------------------- Data structures: OB record -----------------------
+// type obrec
+//     box     b
+//     int     start_idx
+//     int     formed_idx
+//     int     formed_time  // ms
+//     float   top
+//     float   bottom
+//     bool    isBull
+//     bool    confirmed
+
+// // Arrays to hold OBs
+// var array<obrec> ob_list = array.new<obrec>()
+
+// // ----------------------- Sequence tracking -----------------------
+// var bool in_bear_series = false
+// var int  bear_start_idx = na
+// var int  bear_len = 0
+// var float bear_series_high = na
+// var float bear_series_low = na
+// var int  bear_first_idx = na
+// var float bear_first_high = na
+
+// var bool in_bull_series = false
+// var int  bull_start_idx = na
+// var int  bull_len = 0
+// var float bull_series_high = na
+// var float bull_series_low = na
+// var int  bull_first_idx = na
+// var float bull_first_low = na
+
+// n = bar_index
+
+// // Update sequences each bar
+// isBullBar = close > open
+// isBearBar = close < open
+
+// // --- Bear series (for bullish OB) ---
+// if isBearBar
+//     if not in_bear_series
+//         in_bear_series := true
+//         bear_start_idx := n
+//         bear_first_idx := n
+//         bear_first_high := high
+//         bear_len := 1
+//         bear_series_high := high
+//         bear_series_low := low
+//     else
+//         bear_len += 1
+//         bear_series_high := math.max(bear_series_high, high)
+//         bear_series_low := math.min(bear_series_low, low)
+// else
+//     // not a bear bar: keep series alive (we allow subsequent bullish closes to form OB) but check validity duration
+//     if in_bear_series
+//         if n - bear_start_idx > classic_max_valid
+//             // expire
+//             in_bear_series := false
+//             bear_len := 0
+
+// // --- Bull series (for bearish OB) ---
+// if isBullBar
+//     if not in_bull_series
+//         in_bull_series := true
+//         bull_start_idx := n
+//         bull_first_idx := n
+//         bull_first_low := low
+//         bull_len := 1
+//         bull_series_high := high
+//         bull_series_low := low
+//     else
+//         bull_len += 1
+//         bull_series_high := math.max(bull_series_high, high)
+//         bull_series_low := math.min(bull_series_low, low)
+// else
+//     if in_bull_series
+//         if n - bull_start_idx > classic_max_valid
+//             in_bull_series := false
+//             bull_len := 0
+
+// // ----------------------- Box creation helper -----------------------
+// create_ob_box(left_time_ms, top, bottom, isBull) =>
+//     // compute right time using extend in minutes heuristic similar to FVG code
+//     // left_time_ms already time in ms (time of series start)
+//     chart_tf_min = f_tf_in_minutes(timeframe.period)
+//     // extension minutes
+//     ext_minutes = extend * (extend_dynamic ? chart_tf_min : 1)
+//     delta_ms = int(ext_minutes * 60000)
+//     right_ts = left_time_ms + delta_ms + 1
+//     b = box.new(left_time_ms, top, right_ts, bottom, xloc = xloc.bar_time,
+//              border_color = border_unconf,
+//              bgcolor = isBull ? cBull_box_unconf : cBear_box_unconf)
+//     b
+
+// // ----------------------- Formation: detect reversal that forms OB -----------------------
+// // For bull OB formation: we need a subsequent up-close candle closing > high[first_bear_candle]
+// if in_bear_series
+//     // check for formation on a bullish close (candidate reversal)
+//     if (not confirm_on_close and isBullBar) or (confirm_on_close and barstate.isconfirmed and isBullBar)
+//         // a bull candle appeared - check close beyond first wick
+//         if close > bear_first_high and bear_len >= classic_min_seq
+//             // form bullish OB
+//             left_ts = time[bear_start_idx]          // time of series start (ms)
+//             top = bear_series_high
+//             bottom = bear_series_low
+//             b = create_ob_box(left_ts, top, bottom, true)
+//             rec = obrec.new(b, bear_start_idx, n, time, top, bottom, true, false)
+//             array.unshift(ob_list, rec)
+//             // cleanup if too many boxes
+//             if array.size(ob_list) > maxKeep_OBs
+//                 last = array.get(ob_list, array.size(ob_list)-1)
+//                 if not na(last.b)
+//                     last.b.delete()
+//                 array.remove(ob_list, array.size(ob_list)-1)
+//             // reset series tracking
+//             in_bear_series := false
+//             bear_len := 0
+
+// // For bear OB formation: detect reversal on a bearish close closing < low[first_bull_candle]
+// if in_bull_series
+//     if (not confirm_on_close and isBearBar) or (confirm_on_close and barstate.isconfirmed and isBearBar)
+//         if close < bull_first_low and bull_len >= classic_min_seq
+//             // form bearish OB
+//             left_ts = time[bull_start_idx]
+//             top = bull_series_high
+//             bottom = bull_series_low
+//             b = create_ob_box(left_ts, top, bottom, false)
+//             rec = obrec.new(b, bull_start_idx, n, time, top, bottom, false, false)
+//             array.unshift(ob_list, rec)
+//             if array.size(ob_list) > maxKeep_OBs
+//                 last = array.get(ob_list, array.size(ob_list)-1)
+//                 if not na(last.b)
+//                     last.b.delete()
+//                 array.remove(ob_list, array.size(ob_list)-1)
+//             in_bull_series := false
+//             bull_len := 0
+
+// // ----------------------- Handle confirmations (tests) and mitigations -----------------------
+// if array.size(ob_list) > 0
+//     // iterate from newest to oldest
+//     for i = array.size(ob_list) - 1 to 0
+//         rec = array.get(ob_list, i)
+//         // skip deleted box
+//         if na(rec.b)
+//             array.remove(ob_list, i)
+//             continue
+
+//         // fetch box extremes from our stored values (we cannot reliably read box coords for historic boxes)
+//         box_top = rec.top
+//         box_bot = rec.bottom
+
+//         // Confirm test rules:
+//         // Bullish OB: validated when a later candle's wick dips into the box boundary (low < box_top) but closes above box_top (wick-only test)
+//         // Bearish OB: validated when a later candle's wick dips into the box boundary (high > box_bot) but closes below box_bot
+//         if not rec.confirmed
+//             // require the test to occur on a candle after formation
+//             if n > rec.formed_idx
+//                 // use barstate.isconfirmed requirement if desired
+//                 if not confirm_on_close or barstate.isconfirmed
+//                     if rec.isBull
+//                         if low < box_top and close > box_top
+//                             // confirm
+//                             box.set_bgcolor(rec.b, cBull_box_conf)
+//                             box.set_border_color(rec.b, border_conf)
+//                             rec.confirmed := true
+//                             // add label
+//                             label.new(rec.start_idx + math.max(1, math.floor((rec.formed_idx - rec.start_idx)/2)), box_top, text='Bull OB', style=label.style_label_down, color=na, textcolor=color.white, size=getLabelSize(lblSize))
+//                     else
+//                         if high > box_bot and close < box_bot
+//                             box.set_bgcolor(rec.b, cBear_box_conf)
+//                             box.set_border_color(rec.b, border_conf)
+//                             rec.confirmed := true
+//                             label.new(rec.start_idx + math.max(1, math.floor((rec.formed_idx - rec.start_idx)/2)), box_bot, text='Bear OB', style=label.style_label_up, color=na, textcolor=color.white, size=getLabelSize(lblSize))
+//             // save modified rec back
+//             array.set(ob_list, i, rec)
+//         // Mitigation / deletion rules:
+//         // Bullish OB mitigated if price closes fully below box bottom
+//         // Bearish OB mitigated if price closes fully above box top
+//         if rec.isBull
+//             if (not confirm_on_close and close < box_bot) or (confirm_on_close and barstate.isconfirmed and close < box_bot)
+//                 // delete box and remove record
+//                 rec.b.delete()
+//                 array.remove(ob_list, i)
+//         else
+//             if (not confirm_on_close and close > box_top) or (confirm_on_close and barstate.isconfirmed and close > box_top)
+//                 rec.b.delete()
+//                 array.remove(ob_list, i)
+
+// // ----------------------- Visual cleanup on script removal or last bar (optional) -----------------------
+// // no additional logic - boxes persist until script removed or mitigated
+
+// // ----------------------- Alerts -----------------------
+// bull_ob_confirmed = false
+// bear_ob_confirmed = false
+// if array.size(ob_list) > 0
+//     for i = 0 to array.size(ob_list)-1
+//         r = array.get(ob_list, i)
+//         if r.confirmed and r.isBull
+//             bull_ob_confirmed := true
+//         if r.confirmed and not r.isBull
+//             bear_ob_confirmed := true
+
+// alertcondition(bull_ob_confirmed and not bull_ob_confirmed[1], title='Bull OB Confirmed', message='Bullish Order Block confirmed')
+// alertcondition(bear_ob_confirmed and not bear_ob_confirmed[1], title='Bear OB Confirmed', message='Bearish Order Block confirmed')
