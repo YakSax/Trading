@@ -1,0 +1,255 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Sax
+
+//@version=5
+indicator("Multi Timeframe CCI Table v4", shorttitle="Multi-TF CCI v4", overlay=true)
+
+// === Inputs ===
+show_cci_table       = input.bool(true, "Show CCI Table", group="CCI Table")
+tableSizeInput   = input.string("Medium", "Table Size",   options=["Small","Medium","Large"], group="CCI Indicator Table")
+tablePosInput    = input.string("Bottom Right","Table Position",
+                 options=["Top Left","Top Right","Bottom Left","Bottom Right"], group="CCI Indicator Table")
+tableOrientation = input.string("Horizontal", "Table Orientation", options=["Vertical","Horizontal"], group="CCI Indicator Table")
+
+// CCI inputs
+cciLength        = input.int(20, "CCI Length", group = "Commodity Channel Index Settings")
+stdv             = input.float(0.8, "CCI Stdv", group = "Commodity Channel Index Settings")
+sdevLength_cci   = input.int(9, "CCI SDev Length", group = "Commodity Channel Index Settings")
+
+OBCCI_Length     = input.int(20, "CCI Length", group = "Commodity Channel Index Settings")
+emaLenOBCCI      = input.int(20, "On Balance CCI Oscillator Length", group = "Commodity Channel Index Settings")
+
+
+
+// ===========================================================================
+// FUNCTION TO CALCULATE CAPTURE CCI VALUE, "CCI SPEED", AND "CCI ACCELERATION"
+// Returns: [cci_val, cci_speed, accel_icon, accel_bg, cci_bg, speed_bg]
+// ===========================================================================
+
+f_getCCI() =>
+    // CCI value
+    cci_val   = ta.cci(close, cciLength)
+    avg_cci   = ta.ema(cci_val, 9)
+    sdev_cci  = ta.stdev(cci_val, sdevLength_cci)
+
+    // Bands
+    upper_band_cci = avg_cci + stdv * sdev_cci
+    lower_band_cci = avg_cci - stdv * sdev_cci
+
+    // Speed
+    prev_cci  = ta.cci(close[1], cciLength)
+    cci_speed = math.round(cci_val - prev_cci)
+
+    // Conditions
+    is_bullish_cci = cci_val > upper_band_cci
+    is_bearish_cci = cci_val < lower_band_cci
+
+    // Spread from relevant band
+    accel_spread = is_bullish_cci ? (cci_val - upper_band_cci) :
+                   is_bearish_cci ? (lower_band_cci - cci_val) : na
+
+    // Format for display
+    cci_accel_num = na(accel_spread) ? "--" : str.tostring(math.round(accel_spread)) // removed , format.mintick
+
+    // Colors
+    cci_bg     = cci_val > 80 ? color.green : cci_val < -80 ? color.red : color.gray
+    speed_bg   = cci_speed > 0 ? color.green : cci_speed < 0 ? color.red : color.gray
+    accel_bg   = is_bullish_cci ? color.green : is_bearish_cci ? color.red : color.gray
+
+    cci_for_obv     = math.round(ta.cci(close, OBCCI_Length))
+    prev_cci_for_obv= math.round(ta.cci(close[1], OBCCI_Length))
+    cci_speed_obv   = math.round(cci_for_obv - prev_cci_for_obv)
+    os              = ta.cum(cci_speed_obv)
+    obv_osc         = os - ta.ema(os, emaLenOBCCI)
+    obv_val         = math.round(obv_osc)
+    obv_bg          = obv_val > 80 ? color.green : obv_val < -80 ? color.red : color.gray
+
+
+    [math.round(cci_val), cci_speed, cci_accel_num, cci_bg, speed_bg, accel_bg, obv_val, obv_bg]
+
+// -----------------------------
+// Pull from multiple timeframes. "Destructure" the Array
+// -----------------------------
+[cci_val_1, cci_speed_1, accel_icon_1, cci_bg_1, speed_bg_1, accel_bg_1, obv_val_1, obv_bg_1]     = request.security(syminfo.tickerid, "1",   f_getCCI(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[cci_val_2, cci_speed_2, accel_icon_2, cci_bg_2, speed_bg_2, accel_bg_2, obv_val_2, obv_bg_2]     = request.security(syminfo.tickerid, "2",   f_getCCI(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[cci_val_5, cci_speed_5, accel_icon_5, cci_bg_5, speed_bg_5, accel_bg_5, obv_val_5, obv_bg_5]     = request.security(syminfo.tickerid, "5",   f_getCCI(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[cci_val_15, cci_speed_15, accel_icon_15, cci_bg_15, speed_bg_15, accel_bg_15, obv_val_15, obv_bg_15] = request.security(syminfo.tickerid, "15",  f_getCCI(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[cci_val_60, cci_speed_60, accel_icon_60, cci_bg_60, speed_bg_60, accel_bg_60, obv_val_60, obv_bg_60] = request.security(syminfo.tickerid, "60",  f_getCCI(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[cci_val_240, cci_speed_240, accel_icon_240, cci_bg_240, speed_bg_240, accel_bg_240, obv_val_240, obv_bg_240] = request.security(syminfo.tickerid, "240", f_getCCI(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[cci_val_D, cci_speed_D, accel_icon_D, cci_bg_D, speed_bg_D, accel_bg_D, obv_val_D, obv_bg_D]     = request.security(syminfo.tickerid, "D",   f_getCCI(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+// -----------------------------
+// Build table (6 timeframes × 3 rows each = 18 rows)
+// -----------------------------
+// === Vertical CCI Table ===
+var table cci_tbl_vert = tableOrientation == "Vertical" ? table.new(position = tablePosInput == "Top Left"    ? position.top_left :tablePosInput == "Top Right"   ? position.top_right :tablePosInput == "Bottom Left"? position.bottom_left : position.bottom_right,
+         columns = 2, rows = 28, bgcolor = color.gray) : na
+
+if barstate.islast and show_cci_table and tableOrientation == "Vertical"
+    textSize = tableSizeInput == "Small"  ? size.tiny :
+               tableSizeInput == "Medium" ? size.small :
+                                             size.normal
+    hdrBg = color.rgb(200,200,200)
+
+    // 1 min CCI
+    table.cell(cci_tbl_vert, 0, 0, "CCI 1m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 0, str.tostring(cci_val_1), text_color=color.black, bgcolor=cci_bg_1, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 1, "CCI Spd 1m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 1, str.tostring(cci_speed_1), text_color=color.black, bgcolor=speed_bg_1, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 2, "CCI Acc 1m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 2, str.tostring(accel_icon_1), text_color=color.black, bgcolor=accel_bg_1, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 3, "OB_CCI 1m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 3, str.tostring(obv_val_1), text_color=color.black, bgcolor=obv_bg_1, text_size=textSize)
+
+    // 2 min CCI
+    table.cell(cci_tbl_vert, 0, 4, "CCI 2m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 4, str.tostring(cci_val_2), text_color=color.black, bgcolor=cci_bg_2, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 5, "CCI Spd 2m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 5, str.tostring(cci_speed_2), text_color=color.black, bgcolor=speed_bg_2, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 6, "CCI Acc 2m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 6, str.tostring(accel_icon_2), text_color=color.black, bgcolor=accel_bg_2, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 7, "OB_CCI 2m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 7, str.tostring(obv_val_2), text_color=color.black, bgcolor=obv_bg_2, text_size=textSize)
+
+    // 5 min CCI
+    table.cell(cci_tbl_vert, 0, 8, "CCI 5m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 8, str.tostring(cci_val_5), text_color=color.black, bgcolor=cci_bg_5, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 9, "CCI Spd 5m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 9, str.tostring(cci_speed_5), text_color=color.black, bgcolor=speed_bg_5, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 10, "CCI Acc 5m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 10, str.tostring(accel_icon_5), text_color=color.black, bgcolor=accel_bg_5, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 11, "OB_CCI 5m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 11, str.tostring(obv_val_5), text_color=color.black, bgcolor=obv_bg_5, text_size=textSize)
+
+    // 15 min CCI
+    table.cell(cci_tbl_vert, 0, 12, "CCI 15m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 12, str.tostring(cci_val_15), text_color=color.black, bgcolor=cci_bg_15, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 13, "CCI Spd 15m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 13, str.tostring(cci_speed_15), text_color=color.black, bgcolor=speed_bg_15, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 14, "CCI Acc 15m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 14, str.tostring(accel_icon_15), text_color=color.black, bgcolor=accel_bg_15, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 15, "OB_CCI 15m", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 15, str.tostring(obv_val_15), text_color=color.black, bgcolor=obv_bg_15, text_size=textSize)
+
+    // 1H CCI
+    table.cell(cci_tbl_vert, 0, 16, "CCI 1H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 16, str.tostring(cci_val_60), text_color=color.black, bgcolor=cci_bg_60, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 17, "CCI Spd 1H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 17, str.tostring(cci_speed_60), text_color=color.black, bgcolor=speed_bg_60, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 18, "CCI Acc 1H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 18, str.tostring(accel_icon_60), text_color=color.black, bgcolor=accel_bg_60, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 19, "OB_CCI 1H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 19, str.tostring(obv_val_60), text_color=color.black, bgcolor=obv_bg_60, text_size=textSize)
+
+    // 4H CCI
+    table.cell(cci_tbl_vert, 0, 20, "CCI 4H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 20, str.tostring(cci_val_240), text_color=color.black, bgcolor=cci_bg_240, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 21, "CCI Spd 4H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 21, str.tostring(cci_speed_240), text_color=color.black, bgcolor=speed_bg_240, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 22, "CCI Acc 4H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 22, str.tostring(accel_icon_240), text_color=color.black, bgcolor=accel_bg_240, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 23, "OB_CCI 4H", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 23, str.tostring(obv_val_240), text_color=color.black, bgcolor=obv_bg_240, text_size=textSize)
+
+    // Daily CCI
+    table.cell(cci_tbl_vert, 0, 24, "CCI D", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 24, str.tostring(cci_val_D), text_color=color.black, bgcolor=cci_bg_D, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 25, "CCI Spd D", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 25, str.tostring(cci_speed_D), text_color=color.black, bgcolor=speed_bg_D, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 26, "CCI Acc D", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 26, str.tostring(accel_icon_D), text_color=color.black, bgcolor=accel_bg_D, text_size=textSize)
+
+    table.cell(cci_tbl_vert, 0, 27, "OB_CCI D", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_vert, 1, 27, str.tostring(obv_val_D), text_color=color.black, bgcolor=obv_bg_D, text_size=textSize)
+
+
+var table cci_tbl_horiz = tableOrientation == "Horizontal" ? table.new(position = tablePosInput == "Top Left"    ? position.top_left :tablePosInput == "Top Right"   ? position.top_right :tablePosInput == "Bottom Left"? position.bottom_left : position.bottom_right,
+         columns = 5, rows = 8, bgcolor = color.gray) : na
+
+// only update on last bar (reduces flicker)
+if barstate.islast and show_cci_table and tableOrientation == "Horizontal"
+    textSize = tableSizeInput == "Small"  ? size.tiny :
+               tableSizeInput == "Medium" ? size.small :
+                                             size.normal
+    hdrBg = color.rgb(200,200,200)
+
+    table.cell(cci_tbl_horiz, 0, 0, "TF", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 0, " CCI ", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 0, "CCI Speed", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 0, "CCI Accel", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 0, "CCI OBosc", text_color=color.black, bgcolor=hdrBg, text_size=textSize)
+
+    // row 1 = 1m
+    table.cell(cci_tbl_horiz, 0, 1, "1m", text_color=color.black, bgcolor=color.rgb(240,240,240), text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 1, str.tostring(cci_val_1), text_color=color.black, bgcolor=cci_bg_1, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 1, str.tostring(cci_speed_1), text_color=color.black, bgcolor=speed_bg_1, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 1, str.tostring(accel_icon_1), text_color=color.black, bgcolor=accel_bg_1, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 1, str.tostring(obv_val_1), text_color=color.black, bgcolor=obv_bg_1, text_size=textSize)
+ 
+    // row 2 = 2m
+    table.cell(cci_tbl_horiz, 0, 2, "2m", text_color=color.black, bgcolor=color.rgb(240,240,240), text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 2, str.tostring(cci_val_2), text_color=color.black, bgcolor=cci_bg_2, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 2, str.tostring(cci_speed_2), text_color=color.black, bgcolor=speed_bg_2, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 2, str.tostring(accel_icon_2), text_color=color.black, bgcolor=accel_bg_2, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 2, str.tostring(obv_val_2), text_color=color.black, bgcolor=obv_bg_2, text_size=textSize)
+
+    // row 2 = 5m
+    table.cell(cci_tbl_horiz, 0, 3, "5m", text_color=color.black, bgcolor=color.rgb(240,240,240), text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 3, str.tostring(cci_val_5), text_color=color.black, bgcolor=cci_bg_5, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 3, str.tostring(cci_speed_5), text_color=color.black, bgcolor=speed_bg_5, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 3, str.tostring(accel_icon_5), text_color=color.black, bgcolor=accel_bg_5, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 3, str.tostring(obv_val_5), text_color=color.black, bgcolor=obv_bg_5, text_size=textSize)
+
+
+    // row 3 = 15m
+    table.cell(cci_tbl_horiz, 0, 4, "15m", text_color=color.black, bgcolor=color.rgb(240,240,240), text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 4, str.tostring(cci_val_15), text_color=color.black, bgcolor=cci_bg_15, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 4, str.tostring(cci_speed_15), text_color=color.black, bgcolor=speed_bg_15, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 4, str.tostring(accel_icon_15), text_color=color.black, bgcolor=accel_bg_15, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 4, str.tostring(obv_val_15), text_color=color.black, bgcolor=obv_bg_15, text_size=textSize)
+
+    // row 4 = 1H
+    table.cell(cci_tbl_horiz, 0, 5, "1H", text_color=color.black, bgcolor=color.rgb(240,240,240), text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 5, str.tostring(cci_val_60), text_color=color.black, bgcolor=cci_bg_60, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 5, str.tostring(cci_speed_60), text_color=color.black, bgcolor=speed_bg_60, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 5, str.tostring(accel_icon_60), text_color=color.black, bgcolor=accel_bg_60, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 5, str.tostring(obv_val_60), text_color=color.black, bgcolor=obv_bg_60, text_size=textSize)
+
+    // row 5 = 4H
+    table.cell(cci_tbl_horiz, 0, 6, "4H", text_color=color.black, bgcolor=color.rgb(240,240,240), text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 6, str.tostring(cci_val_240), text_color=color.black, bgcolor=cci_bg_240, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 6, str.tostring(cci_speed_240), text_color=color.black, bgcolor=speed_bg_240, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 6, str.tostring(accel_icon_240), text_color=color.black, bgcolor=accel_bg_240, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 6, str.tostring(obv_val_240), text_color=color.black, bgcolor=obv_bg_240, text_size=textSize)
+
+    // row 6 = D
+    table.cell(cci_tbl_horiz, 0, 7, "D", text_color=color.black, bgcolor=color.rgb(240,240,240), text_size=textSize)
+    table.cell(cci_tbl_horiz, 1, 7, str.tostring(cci_val_D), text_color=color.black, bgcolor=cci_bg_D, text_size=textSize)
+    table.cell(cci_tbl_horiz, 2, 7, str.tostring(cci_speed_D), text_color=color.black, bgcolor=speed_bg_D, text_size=textSize)
+    table.cell(cci_tbl_horiz, 3, 7, str.tostring(accel_icon_D), text_color=color.black, bgcolor=accel_bg_D, text_size=textSize)
+    table.cell(cci_tbl_horiz, 4, 7, str.tostring(obv_val_D), text_color=color.black, bgcolor=obv_bg_D, text_size=textSize)
+
+//
+
+
+
