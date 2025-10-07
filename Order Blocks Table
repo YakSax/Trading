@@ -1,0 +1,205 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+
+// © Sax
+
+//@version=5
+indicator("Order Blocks Table", shorttitle="Order Blocks Table", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ----------------------- Inputs -----------------------
+classic_min_seq    = input.int(1, "Classic Minimum OB Series Length (min_seq)", minval=1, group='General OB Settings')
+classic_max_valid  = input.int(10, "Classic Maximum Series Validity (bars)", minval=1, group='General OB Settings')
+confirm_on_close   = input.bool(true, 'Only confirm on candle close', group='General OB Settings')
+
+
+// Chart TF colors (optional separate style; reusing TF1 confirmed/unconfirmed if desired)
+cBull_box_chart        = input.color(color.new(color.teal, 40), "Bullish OB (Chart TF) - Unconfirmed", group='OB Style Settings')
+cBear_box_chart        = input.color(color.new(#ff4d4d, 40), "Bearish OB (Chart TF) - Unconfirmed", group='OB Style Settings')
+cBull_box_chart_conf   = input.color(color.new(color.teal, 30), "Bullish OB (Chart TF) - Confirmed", group='OB Style Settings')
+cBear_box_chart_conf   = input.color(color.new(#ff4d4d, 30), "Bearish OB (Chart TF) - Confirmed", group='OB Style Settings')
+
+
+// ----------------------- OB Table Inputs (same options as CISD table) -----------------------
+showOBTable      = input.bool(true,  "Show OB Table", group="Indicator Table")
+OBTableSizeInput = input.string("Small", "Table Size",   options=["Small","Medium","Large"], group="Indicator Table")
+OBTablePosInput  = input.string("Bottom Right", "Table Position", 
+                     options=["Top Left","Top Right","Bottom Left","Bottom Right"], group="Indicator Table")
+
+
+
+var string _OBLabel = "OB"
+var string _plus     = "+"
+var string _minus    = "-"
+var string _empty    = ""
+
+
+// ----------------------- Types -----------------------
+type obtf
+    float top
+    float bottom
+    bool  isBull
+    int   start_t
+    int   formed_t
+    bool  confirmed
+
+// ----------------------- Arrays (per-TF) -----------------------
+var f_ob_records_chart = array.new<obtf>(0)
+var f_ob_areas_chart   = array.new<box>(0)
+var t0 = 0
+
+var f_ob_records_1 = array.new<obtf>(0)
+var f_ob_areas_1   = array.new<box>(0)
+var t1 = 0
+
+var f_ob_records_2 = array.new<obtf>(0)
+var f_ob_areas_2   = array.new<box>(0)
+var t2 = 0
+
+var f_ob_records_3 = array.new<obtf>(0)
+var f_ob_areas_3   = array.new<box>(0)
+var t3 = 0
+
+// ----------------------- HTF detection function (runs under request.security) -----------------------
+detect_ob() =>
+    bool out_found = false
+    float out_top = na
+    float out_bottom = na
+    bool out_isbull = na
+    int out_start_t = na
+    int out_formed_t = na
+
+    lookback = math.max(1, classic_max_valid + 2)
+    for L = classic_min_seq to classic_max_valid
+        for end_off = 1 to lookback
+            start_off = end_off + L - 1
+            if start_off > lookback
+                continue
+            // bearish run check
+            all_bear = true
+            for t = start_off to end_off
+                if not (close[t] < open[t])
+                    all_bear := false
+            if all_bear
+                first_high_val = high[start_off]
+                series_high_val = high[end_off]
+                series_low_val = low[end_off]
+                if close > open and close > first_high_val
+                    out_found := true
+                    out_top := series_high_val
+                    out_bottom := series_low_val
+                    out_isbull := true
+                    out_start_t := int(time[start_off])
+                    out_formed_t := int(time)
+                    break
+            // bullish run check
+            all_bull = true
+            for t2a = start_off to end_off
+                if not (close[t2a] > open[t2a])
+                    all_bull := false
+            if all_bull
+                first_low_val = low[start_off]
+                series_high_val2 = high[end_off]
+                series_low_val2 = low[end_off]
+                if close < open and close < first_low_val
+                    out_found := true
+                    out_top := series_high_val2
+                    out_bottom := series_low_val2
+                    out_isbull := false
+                    out_start_t := int(time[start_off])
+                    out_formed_t := int(time)
+                    break
+        if out_found
+            break
+
+    [out_found, out_top, out_bottom, out_isbull, out_start_t, out_formed_t]
+
+
+// ----------------------- OB Multi-TF Table (1m,2m,5m,10m,15m,30m,1h,4h,D,W) -----------------------
+// Call detect_ob() on the requested timeframes (pure function — safe under request.security)
+[b1m_found, b1m_top, b1m_bot, b1m_isbull, b1m_start_t, b1m_formed_t] = request.security(syminfo.tickerid, "1",   detect_ob(), lookahead = barmerge.lookahead_off)
+[b2m_found, b2m_top, b2m_bot, b2m_isbull, b2m_start_t, b2m_formed_t] = request.security(syminfo.tickerid, "2",   detect_ob(), lookahead = barmerge.lookahead_off)
+[b5m_found, b5m_top, b5m_bot, b5m_isbull, b5m_start_t, b5m_formed_t] = request.security(syminfo.tickerid, "5",   detect_ob(), lookahead = barmerge.lookahead_off)
+[b10m_found,b10m_top,b10m_bot,b10m_isbull,b10m_start_t,b10m_formed_t] = request.security(syminfo.tickerid, "10",  detect_ob(), lookahead = barmerge.lookahead_off)
+[b15m_found,b15m_top,b15m_bot,b15m_isbull,b15m_start_t,b15m_formed_t] = request.security(syminfo.tickerid, "15",  detect_ob(), lookahead = barmerge.lookahead_off)
+[b30m_found,b30m_top,b30m_bot,b30m_isbull,b30m_start_t,b30m_formed_t] = request.security(syminfo.tickerid, "30",  detect_ob(), lookahead = barmerge.lookahead_off)
+[b1h_found, b1h_top, b1h_bot, b1h_isbull, b1h_start_t, b1h_formed_t] = request.security(syminfo.tickerid, "60",  detect_ob(), lookahead = barmerge.lookahead_off)
+[b4h_found, b4h_top, b4h_bot, b4h_isbull, b4h_start_t, b4h_formed_t] = request.security(syminfo.tickerid, "240", detect_ob(), lookahead = barmerge.lookahead_off)
+[bD_found,  bD_top,  bD_bot,  bD_isbull,  bD_start_t,  bD_formed_t]  = request.security(syminfo.tickerid, "D",   detect_ob(), lookahead = barmerge.lookahead_off)
+[bW_found,  bW_top,  bW_bot,  bW_isbull,  bW_start_t,  bW_formed_t]  = request.security(syminfo.tickerid, "W",   detect_ob(), lookahead = barmerge.lookahead_off)
+
+// Helper: map detect_ob() output -> icon + bgcolor (adopts same arrow scheme as CISD table)
+f_getOBIcon(found, isBull) =>
+    string iconOB = "--"
+    color bgOB = color.gray
+    if found
+        iconOB := isBull ? "▲" : "▼"
+        // Use Chart TF confirmed colors to visually match chart boxes (change here if you prefer TF-specific colors)
+        bgOB := isBull ? color.new(cBull_box_chart_conf, 0) : color.new(cBear_box_chart_conf, 0)
+    [iconOB, bgOB]
+
+// Create icons/bg for each TF
+[icon1m,  bg1m]  = f_getOBIcon(b1m_found,  b1m_isbull)
+[icon2m,  bg2m]  = f_getOBIcon(b2m_found,  b2m_isbull)
+[icon5m,  bg5m]  = f_getOBIcon(b5m_found,  b5m_isbull)
+[icon10m, bg10m] = f_getOBIcon(b10m_found, b10m_isbull)
+[icon15m, bg15m] = f_getOBIcon(b15m_found, b15m_isbull)
+[icon30m, bg30m] = f_getOBIcon(b30m_found, b30m_isbull)
+[icon1h,  bg1h]  = f_getOBIcon(b1h_found,  b1h_isbull)
+[icon4h,  bg4h]  = f_getOBIcon(b4h_found,  b4h_isbull)
+[iconD,   bgD2]  = f_getOBIcon(bD_found,   bD_isbull)
+[iconW,   bgW2]  = f_getOBIcon(bW_found,   bW_isbull)
+
+/// ----------------------- Create OB table (2 cols x 10 rows) using user position/size -----------------------
+var table tblOB = table.new(
+     position = OBTablePosInput == "Top Left" ? position.top_left : OBTablePosInput == "Top Right" ? position.top_right : OBTablePosInput == "Bottom Left" ? position.bottom_left : position.bottom_right,
+     columns = 2, rows = 10, bgcolor = color.gray)
+
+// Fill the table on the last bar (mirror CISD style) — respect show/hide + size input
+if barstate.islast and showOBTable
+    txtSizeOB = OBTableSizeInput == "Small"  ? size.tiny : OBTableSizeInput == "Medium" ? size.small : size.normal
+    hdrBgOB = color.rgb(200, 200, 200)
+
+    // Row 0 - 1m
+    table.cell(tblOB, 0, 0, "OB 1m", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 0, icon1m,    text_color=color.black, bgcolor=bg1m,    text_size=txtSizeOB)
+
+    // Row 1 - 2m
+    table.cell(tblOB, 0, 1, "OB 2m", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 1, icon2m,    text_color=color.black, bgcolor=bg2m,    text_size=txtSizeOB)
+
+    // Row 2 - 5m
+    table.cell(tblOB, 0, 2, "OB 5m", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 2, icon5m,    text_color=color.black, bgcolor=bg5m,    text_size=txtSizeOB)
+
+    // Row 3 - 10m
+    table.cell(tblOB, 0, 3, "OB 10m", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 3, icon10m,    text_color=color.black, bgcolor=bg10m,    text_size=txtSizeOB)
+
+    // Row 4 - 15m
+    table.cell(tblOB, 0, 4, "OB 15m", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 4, icon15m,    text_color=color.black, bgcolor=bg15m,    text_size=txtSizeOB)
+
+    // Row 5 - 30m
+    table.cell(tblOB, 0, 5, "OB 30m", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 5, icon30m,    text_color=color.black, bgcolor=bg30m,    text_size=txtSizeOB)
+
+    // Row 6 - 1h
+    table.cell(tblOB, 0, 6, "OB 1h", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 6, icon1h,    text_color=color.black, bgcolor=bg1h,    text_size=txtSizeOB)
+
+    // Row 7 - 4h
+    table.cell(tblOB, 0, 7, "OB 4h", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 7, icon4h,    text_color=color.black, bgcolor=bg4h,    text_size=txtSizeOB)
+
+    // Row 8 - Daily
+    table.cell(tblOB, 0, 8, "OB D", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 8, iconD,     text_color=color.black, bgcolor=bgD2,    text_size=txtSizeOB)
+
+    // Row 9 - Weekly
+    table.cell(tblOB, 0, 9, "OB W", text_color=color.black, bgcolor=hdrBgOB, text_size=txtSizeOB)
+    table.cell(tblOB, 1, 9, iconW,     text_color=color.black, bgcolor=bgW2,    text_size=txtSizeOB)
+
+
+
+
+
+
