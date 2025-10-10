@@ -1,0 +1,1726 @@
+
+// © Yak_Sax
+//@version=6
+indicator('Breaker, Rolling Vwap, ADR Zones', shorttitle = 'Breaker,VWAP,ADR Zones', max_lines_count = 500, max_boxes_count = 200, max_labels_count = 400, max_bars_back = 5000, overlay = true)
+
+
+// ========================================================================================
+// ACKNOWLEDGEMENTS:
+// Credit where credit is due, these are the individuals below who graciously provided 
+// open-source code for their excellent indicators and for that I am grateful
+// LuxAlgo's 2023 Breaker Blocks with Signals [LuxAlgo]
+// the author(s) of TradingView's in-house Rolling VWAP indicator (PineCoders)
+// thestratuchiha's ATRvsDTR + ADR Zone + SSS50%
+// ========================================================================================
+
+
+// ================================================================================================
+// INDICATOR TABLE SETTINGS
+// ================================================================================================
+
+// Table Size Selection
+tableSizeInput = input.string('Small', title = 'Table Size', options = ['Small', 'Medium', 'Large'], group ='Indicator Table')
+
+// Table Position Selection
+tablePositionInput = input.string('Bottom Right', title = 'Table Position', options = ['Top Left', 'Top Right', 'Bottom Left', 'Bottom Right'], group ='Indicator Table')
+
+// ============
+// PLOT VWAP
+// ============
+
+hideVwap = input.bool(false, title="Hide VWAP (all timeframes)", group="VWAP Settings", display = display.data_window)
+hideonDWM = input(false, title="Hide VWAP on 1D or Above", group="VWAP Settings", display = display.data_window)
+var anchor = input.string(defval = "Session", title="Anchor Period",
+ options=["Session", "Week", "Month", "Quarter", "Year", "Decade", "Century", "Earnings", "Dividends", "Splits"], group="VWAP Settings")
+vwap_src = input(title = "Source", defval = hlc3, group="VWAP Settings", display = display.data_window)
+offset = input.int(0, title="Offset", group="VWAP Settings", minval=0, display = display.data_window)
+
+BANDS_GROUP = "VWAP Bands Settings"
+CALC_MODE_TOOLTIP = "Determines the units used to calculate the distance of the bands. When 'Percentage' is selected, a multiplier of 1 means 1%."
+calcModeInput = input.string("Standard Deviation", "Bands Calculation Mode", options = ["Standard Deviation", "Percentage"], group = BANDS_GROUP, tooltip = CALC_MODE_TOOLTIP, display = display.data_window)
+showBand_1 = input(true, title = "", group = BANDS_GROUP, inline = "band_1", display = display.data_window)
+bandMult_1 = input.float(1.0, title = "Bands Multiplier #1", group = BANDS_GROUP, inline = "band_1", step = 0.5, minval=0, display = display.data_window)
+showBand_2 = input(false, title = "", group = BANDS_GROUP, inline = "band_2", display = display.data_window)
+bandMult_2 = input.float(2.0, title = "Bands Multiplier #2", group = BANDS_GROUP, inline = "band_2", step = 0.5, minval=0, display = display.data_window)
+showBand_3 = input(false, title = "", group = BANDS_GROUP, inline = "band_3", display = display.data_window)
+bandMult_3 = input.float(3.0, title = "Bands Multiplier #3", group = BANDS_GROUP, inline = "band_3", step = 0.5, minval=0, display = display.data_window)
+
+cumVolume = ta.cum(volume)
+if barstate.islast and cumVolume == 0
+    runtime.error("No volume is provided by the data vendor.")
+
+new_earnings = request.earnings(syminfo.tickerid, earnings.actual, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+new_dividends = request.dividends(syminfo.tickerid, dividends.gross, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+new_split = request.splits(syminfo.tickerid, splits.denominator, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+
+isNewPeriod = switch anchor
+	"Earnings"  => not na(new_earnings)
+	"Dividends" => not na(new_dividends)
+	"Splits"    => not na(new_split)
+	"Session"   => timeframe.change("D")
+	"Week"      => timeframe.change("W")
+	"Month"     => timeframe.change("M")
+	"Quarter"   => timeframe.change("3M")
+	"Year"      => timeframe.change("12M")
+	=> false
+
+isEsdAnchor = anchor == "Earnings" or anchor == "Dividends" or anchor == "Splits"
+if na(vwap_src[1]) and not isEsdAnchor
+	isNewPeriod := true
+
+float vwapValue = na
+float upperBandValue1 = na
+float lowerBandValue1 = na
+float upperBandValue2 = na
+float lowerBandValue2 = na
+float upperBandValue3 = na
+float lowerBandValue3 = na
+
+if not (hideVwap or (hideonDWM and timeframe.isdwm))
+    [_vwap, _stdevUpper, _] = ta.vwap(vwap_src, isNewPeriod, 1)
+	vwapValue := _vwap
+    stdevAbs = _stdevUpper - _vwap
+	bandBasis = calcModeInput == "Standard Deviation" ? stdevAbs : _vwap * 0.01
+	upperBandValue1 := _vwap + bandBasis * bandMult_1
+	lowerBandValue1 := _vwap - bandBasis * bandMult_1
+	upperBandValue2 := _vwap + bandBasis * bandMult_2
+	lowerBandValue2 := _vwap - bandBasis * bandMult_2
+	upperBandValue3 := _vwap + bandBasis * bandMult_3
+	lowerBandValue3 := _vwap - bandBasis * bandMult_3
+
+VwapStyleStr = input.string('Circles', 'VWAP plot style', options = ['Circles', 'Cross', 'Line'], group = 'VWAP Settings') 
+// Map string to plot.style enum
+Vwapstyle = switch VwapStyleStr
+    'Circles' => plot.style_circles
+    'Cross'   => plot.style_cross
+    'Line'    => plot.style_line
+    => plot.style_line   // default/fallback
+
+VwapColor = input.color(color.rgb(255, 255, 255, 30), 'Vwap Color', group = 'VWAP Settings')
+
+plot(vwapValue, title = "VWAP",color = VwapColor, linewidth=2, style=Vwapstyle, offset = offset)
+text_VWAP = 'VWAP'
+var color_text_VWAP = input.color(defval = color.rgb(41, 98, 255, 30), title = text_VWAP, group="VWAP Settings")
+
+upperBand_1 = plot(upperBandValue1, title="Upper Band #1", color = color.rgb(255, 255, 255, 30), linewidth=2, offset = offset, display = showBand_1 ? display.all : display.none)  // removed ", editable = showBand_1" at end due to Version 5
+lowerBand_1 = plot(lowerBandValue1, title="Lower Band #1", color =color.rgb(255, 255, 255, 30), linewidth=2, offset = offset, display = showBand_1 ? display.all : display.none) // removed ", editable = showBand_1" at end due to Version 5
+fill(upperBand_1, lowerBand_1,      title="Bands Fill #1", color = color.new(color.green, 100),  display = showBand_1 ? display.all : display.none) // removed ", editable = showBand_1" at end due to Version 5
+
+upperBand_2 = plot(upperBandValue2, title="Upper Band #2", color = color.rgb(121, 121, 97, 60),  offset = offset, display = showBand_2 ? display.all : display.none) // removed ", editable = showBand_2" at end due to Version 5
+lowerBand_2 = plot(lowerBandValue2, title="Lower Band #2", color = color.rgb(121, 121, 97, 60), offset = offset, display = showBand_2 ? display.all : display.none) // removed ", editable = showBand_2" at end due to Version 5
+fill(upperBand_2, lowerBand_2,      title="Bands Fill #2", color = color.new(color.olive, 100),   display = showBand_2 ? display.all : display.none) // removed ", editable = showBand_2" at end due to Version 5
+
+upperBand_3 = plot(upperBandValue3, title="Upper Band #3", color = color.rgb(91, 131, 127, 60), offset = offset, display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
+lowerBand_3 = plot(lowerBandValue3, title="Lower Band #3", color = color.rgb(91, 131, 127, 60), offset = offset, display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
+fill(upperBand_3, lowerBand_3,      title="Bands Fill #3", color = color.new(color.teal, 100),   display = showBand_3 ? display.all : display.none) // removed ", editable = showBand_3" at end due to Version 5
+
+//Workaround to disable color management on the standard tab Style for plots
+//Custom inputs for colors should be used instead
+transp_func() =>
+    transp_0 = 0
+    transp_0
+
+draw_label_Vwap(_x, _y, _text, _xloc, _yloc, _color, _style, _textcolor, _size, _textalign, _tooltip) =>
+    dlabel = label.new(x = _x, y = _y, text = _text, xloc = _xloc, yloc = _yloc, color = _color, style = _style, textcolor = _textcolor, size = _size, textalign = _textalign, tooltip = _tooltip)
+    label.delete(dlabel[1])
+
+// if not (hideVwap or (hideonDWM and timeframe.isdwm))
+if not (hideVwap or (hideonDWM and timeframe.isdwm))
+    draw_label_Vwap(bar_index + 1, vwapValue, text_VWAP, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_text_VWAP, transp_func()), size.normal, text.align_left, '')
+
+
+// Define Bullish/Bearish Condition for VWAP
+isBullish_Vwap = close > vwapValue
+isBearish_Vwap = close < vwapValue
+
+// Function to get Icon & Background Color
+// getIconAndColor(isBullish_Vwap, isBearish_Vwap) =>
+//     icon_Vwap = isBullish_Vwap ? "▲" : isBearish_Vwap ? "▼" : "--"
+//     bgColor_Vwap = isBullish_Vwap ? color.green : isBearish_Vwap ? color.red : color.gray
+//     [icon_Vwap, bgColor_Vwap]
+
+// Get Icon & Color for VWAP Status
+// [icon_Vwap, bgColor_Vwap] = getIconAndColor(isBullish_Vwap, isBearish_Vwap)
+
+
+// ============
+// PLOT ROLLING VWAP
+// ============
+
+// Rolling VWAP
+// v4, 2025.04.22
+
+// This code's style is based on the recommendations from the Pine Script User Manual's Style guide:
+//    https://www.tradingview.com/pine-script-docs/writing/style-guide/
+
+import PineCoders/ConditionalAverages/2 as pc
+
+//#region ———————————————————— Constants and inputs
+
+// Time constants
+int MS_IN_MIN  = 60 * 1000
+int MS_IN_HOUR = MS_IN_MIN  * 60
+int MS_IN_DAY  = MS_IN_HOUR * 24
+
+
+// Tooltips
+string TT_SRC = "The source series for which to calculate the RVWAP. The default is the average of the high, low, and
+     close prices."
+string TT_WIN = "By default, the indicator selects the rolling period for the RVWAP automatically based on the chart's 
+     timeframe. When this checkbox is selected, the rolling period's is the total span from the days, hours, and minutes 
+     specified in the fields below."
+string TT_MB  = "The minimum number of recent values to preserve in the moving window, even if they are outside the
+     specified time window. Keeping a minimum number of bars in the calculation helps avoid situations where a
+     large time gap between bars causes an empty period."
+string TT_STD = "Sets the multiplier for standard deviation bands offset above and below the RVWAP, and their color.
+     For example, with a multiplier of 1, the distance from the RVWAP to the bands is 100% of the standard deviation.
+     \n\nNote that the bands are hidden if the input's value is 0."
+
+
+// Inputs
+float  srcInput             = input.source(hlc3, "Source", tooltip = TT_SRC)
+
+string GRP2                 = "Time period"
+bool   fixedTfInput         = input.bool(true,      "Use a fixed time period", group = GRP2, tooltip = TT_WIN)
+int    daysInput_1            = input.int(2,           "Input 1 Days",                    group = GRP2, minval = 0) * MS_IN_DAY
+int    hoursInput_1           = input.int(0,           "Input 1 Hours",                   group = GRP2, minval = 0, maxval = 23) * MS_IN_HOUR
+int    daysInput_2            = input.int(6,           "Input 2 Days",                    group = GRP2, minval = 0) * MS_IN_DAY
+int    hoursInput_2           = input.int(0,           "Input 2 Hours",                   group = GRP2, minval = 0, maxval = 23) * MS_IN_HOUR
+int    daysInput_3            = input.int(15,           "Input 3 Days",                    group = GRP2, minval = 0) * MS_IN_DAY
+int    hoursInput_3           = input.int(0,           "Input 3 Hours",                   group = GRP2, minval = 0, maxval = 23) * MS_IN_HOUR
+
+// bool   showInfoBoxInput     = input.bool(true,       "Show time period",        group = GRP2)
+// string infoBoxSizeInput     = input.string("small",  "Size ",    inline = "21", group = GRP2, options = ["tiny", "small", "normal", "large", "huge", "auto"])
+// string infoBoxYPosInput     = input.string("bottom", "↕",        inline = "21", group = GRP2, options = ["top", "middle", "bottom"])
+// string infoBoxXPosInput     = input.string("left",   "↔",        inline = "21", group = GRP2, options = ["left", "center", "right"])
+// color  infoBoxColorInput    = input.color(#787b86, "",         inline = "21", group = GRP2)
+// color  infoBoxTxtColorInput = input.color(#ffffff, "T",        inline = "21", group = GRP2)
+
+string GRP3                 = "Deviation bands"
+float  stdevMult1           = input.float(0.0,       "Bands Multiplier 1", inline = "31", group = GRP3, minval = 0.0, step = 0.5, tooltip = TT_STD)
+float  stdevMult2           = input.float(0.0,       "Bands Multiplier 2", inline = "32", group = GRP3, minval = 0.0, step = 0.5, tooltip = TT_STD)
+float  stdevMult3           = input.float(0.0,       "Bands Multiplier 3", inline = "33", group = GRP3, minval = 0.0, step = 0.5, tooltip = TT_STD)
+color  stdevColor1          = input.color(#4caf50, "",                   inline = "31", group = GRP3)
+color  stdevColor2          = input.color(#ffeb3b, "",                   inline = "32", group = GRP3)
+color  stdevColor3          = input.color(#ff5252, "",                   inline = "33", group = GRP3)
+
+string GRP4                 = "Minimum Window Size"
+int    minBarsInput         = input.int(10, "Bars", group = GRP4, tooltip = TT_MB) 
+//#endregion
+
+
+
+//#region ———————————————————— Functions
+
+
+// @function            Calculates a scaled time period, in milliseconds, based on the chart's timeframe.
+// @returns             (int) A millisecond time difference for use as the period in the RVWAP calculation.
+timeStep() =>
+    int tfInMs = timeframe.in_seconds() * 1000
+    float step =
+      switch
+        tfInMs <= MS_IN_MIN        => MS_IN_HOUR
+        tfInMs <= MS_IN_MIN  * 5   => MS_IN_HOUR * 4
+        tfInMs <= MS_IN_HOUR       => MS_IN_DAY  * 1
+        tfInMs <= MS_IN_HOUR * 4   => MS_IN_DAY  * 3
+        tfInMs <= MS_IN_HOUR * 12  => MS_IN_DAY  * 7
+        tfInMs <= MS_IN_DAY        => MS_IN_DAY  * 30.4375
+        tfInMs <= MS_IN_DAY  * 7   => MS_IN_DAY  * 90
+        => MS_IN_DAY * 365
+    int result = int(step)
+
+
+// @function            Creates a string representing a specified time period as a number of days, hours, and minutes, 
+//                      or as a week or month. 
+// @param timeInMs_1      (series int) A millisecond time difference to express in other units.
+// @returns             (string) A "string" representation of the time difference in mixed calendar units. 
+tfString(series int timeInMs_1) =>
+    int s  = timeInMs_1 / 1000
+    int m  = s / 60
+    int h  = m / 60
+    int tm = math.floor(m % 60)
+    int th = math.floor(h % 24)
+    int d  = math.floor(h / 24)
+    string result = 
+      switch
+        d == 30 and th == 10 and tm == 30 => "1M"
+        d == 7  and th == 0  and tm == 0  => "1W"
+        =>
+            string dStr = d  > 0 ? str.tostring(d)  + "D"  : ""
+            string hStr = th > 0 ? str.tostring(th) + "H"  : ""
+            string mStr = tm > 0 ? str.tostring(tm) + "min" : ""
+            bool hasHours = hStr != ""
+            bool hasMins  = mStr != "" 
+            dStr + (hasHours or hasMins ? " " : "") + hStr + (hasMins ? " " : "") + mStr
+//#endregion
+
+
+
+//#region ———————————————————— Calculations and display
+
+
+// Stop the indicator and raise an error if no volume data is available by the last bar. 
+if ta.cum(nz(volume)) == 0 and barstate.islast 
+    runtime.error("No volume is provided by the data vendor.")
+
+// @variable The number of milliseconds to use as the period in RVWAP calculations.
+//           Represents the total milliseconds from the "Time period" inputs if `fixedTfInput` is `true`.
+//           Otherwise, it is an automatic number of milliseconds based on the chart's timeframe. 
+int timeInMs_1 = fixedTfInput ? hoursInput_1  + daysInput_1 : timeStep()
+int timeInMs_2 = fixedTfInput ? hoursInput_2  + daysInput_2 : timeStep()
+int timeInMs_3 = fixedTfInput ? hoursInput_3  + daysInput_3 : timeStep()
+
+// Calculate the sum of volume values and the volume-weighted sums of the `srcInput` and its squared value over the 
+// specified time window. 
+float sumSrcVol_1    = pc.totalForTimeWhen(srcInput * volume, timeInMs_1, true, minBarsInput)
+float sumVol_1       = pc.totalForTimeWhen(volume, timeInMs_1, true, minBarsInput)
+float sumSrcSrcVol_1 = pc.totalForTimeWhen(volume * math.pow(srcInput, 2), timeInMs_1, true, minBarsInput)
+
+float sumSrcVol_2    = pc.totalForTimeWhen(srcInput * volume, timeInMs_2, true, minBarsInput)
+float sumVol_2       = pc.totalForTimeWhen(volume, timeInMs_2, true, minBarsInput)
+float sumSrcSrcVol_2 = pc.totalForTimeWhen(volume * math.pow(srcInput, 2), timeInMs_2, true, minBarsInput)
+
+float sumSrcVol_3    = pc.totalForTimeWhen(srcInput * volume, timeInMs_3, true, minBarsInput)
+float sumVol_3       = pc.totalForTimeWhen(volume, timeInMs_3, true, minBarsInput)
+float sumSrcSrcVol_3 = pc.totalForTimeWhen(volume * math.pow(srcInput, 2), timeInMs_3, true, minBarsInput)
+
+// @variable The RVWAP value. Represents the volume-weighted sum of `srcInput` values divided by the volume sum. 
+float rollingVWAP_1 = sumSrcVol_1 / sumVol_1
+float rollingVWAP_2 = sumSrcVol_2 / sumVol_2
+float rollingVWAP_3 = sumSrcVol_3 / sumVol_3
+
+
+// @variable An estimate of local variance using `rollingVWAP` as the expected value.
+//           The approximation relies on the following formula: variance = E[x*x] - E[x]*E[x]
+//           In the rare case where very small values cause a negative approximation, the result is 0.
+float variance_1 = math.max(sumSrcSrcVol_1 / sumVol_1 - math.pow(rollingVWAP_1, 2), 0.0)
+float variance_2 = math.max(sumSrcSrcVol_2 / sumVol_2 - math.pow(rollingVWAP_2, 2), 0.0)
+float variance_3 = math.max(sumSrcSrcVol_3 / sumVol_3 - math.pow(rollingVWAP_3, 2), 0.0)
+// @variable An estimate of the local standard deviation based on the `rollingVWAP_1`. 
+float stDev_1 = math.sqrt(variance_1)
+float stDev_2 = math.sqrt(variance_2)
+float stDev_3 = math.sqrt(variance_3)
+
+// Calculate three sets of standard deviation bands with user-specified multipliers. 
+float upperBand1   = rollingVWAP_1 + stDev_1 * stdevMult1
+float lowerBand1   = rollingVWAP_1 - stDev_1 * stdevMult1
+
+// float upperBand2   = rollingVWAP_1 + stDev * stdevMult2
+// float lowerBand2   = rollingVWAP_1 - stDev * stdevMult2
+// float upperBand3   = rollingVWAP_1 + stDev * stdevMult3
+// float lowerBand3   = rollingVWAP_1 - stDev * stdevMult3
+
+// Plot the `rollingVWAP_1` value. 
+plot(rollingVWAP_1, "Rolling VWAP", color.orange)
+plot(rollingVWAP_2, "Rolling VWAP", color.rgb(255, 251, 0))
+plot(rollingVWAP_3, "Rolling VWAP", color.rgb(234, 0, 255))
+
+// Plot each set of standard deviation bands whose corresponding `stdevMult*` value is nonzero. 
+p1 = plot(stdevMult1 != 0 ? upperBand1 : na, "Upper Band 1", stdevColor1)
+p2 = plot(stdevMult1 != 0 ? lowerBand1 : na, "Lower Band 1", stdevColor1)
+
+// p3 = plot(stdevMult2 != 0 ? upperBand2 : na, "Upper Band 2", stdevColor2)
+// p4 = plot(stdevMult2 != 0 ? lowerBand2 : na, "Lower Band 2", stdevColor2)
+// p5 = plot(stdevMult3 != 0 ? upperBand3 : na, "Upper Band 3", stdevColor3)
+// p6 = plot(stdevMult3 != 0 ? lowerBand3 : na, "Lower Band 3", stdevColor3)
+
+// Fill the space between plotted bands. 
+fill(p1, p2, color.new(color.green, 95), "Bands Fill")
+
+// fill(p3, p4, color.new(color.green, 95), "Bands Fill")
+// fill(p5, p6, color.new(color.green, 95), "Bands Fill")
+
+// // Logic to display the RVWAP's time period on the last historical bar. 
+// if showInfoBoxInput and barstate.islastconfirmedhistory
+//     //@variable A single-cell table positioned at a user-specified location.
+//     table tfDisplay = table.new(infoBoxYPosInput + "_" + infoBoxXPosInput, 1, 1)
+//     // Initialize the table's cell to display the timeframe string for the `timeInMs_1` value. 
+//     table.cell(
+//          tfDisplay, 0, 0, tfString(timeInMs_1), bgcolor = infoBoxColorInput, text_color = infoBoxTxtColorInput, 
+//          text_size = infoBoxSizeInput
+//      )
+// //#endregion
+
+
+
+
+
+
+// =====================================================================
+// BREAKER BLOCK (ICT CONCEPT)
+// with credit to LuxAlgo's 2023 Breaker Blocks with Signals [LuxAlgo]
+// =====================================================================
+// (your original header/indicator declaration should remain above this code)
+//------------------------------------------------------------------------------
+//Settings
+//-----------------------------------------------------------------------------{
+shZZ = false
+len = input.int(5, title = '     Length', inline = 'MS', group = 'Market Structure', minval = 1, maxval = 10)
+//Breaker block
+breakerCandleOnlyBody = input.bool(false, title = 'Use only candle body', group = 'Breaker Block')
+breakerCandle_2Last = input.bool(true, title = 'Use 2 candles instead of 1', group = 'Breaker Block', tooltip = 'In the same direction')
+tillFirstBreak = input.bool(true, title = 'Stop at first break of center line', group = 'Breaker Block')
+
+//PD array
+onlyWhenInPDarray = input.bool(false, title = 'Only when E is in Premium/Discount Array', group = 'PD array')
+showPDarray = input.bool(false, title = 'show Premium/Discount Zone', group = 'PD array')
+showBreaks = input.bool(false, title = 'Highlight Swing Breaks', group = 'PD array')
+showSPD = input.bool(true, title = 'Show Swings/PD Arrays', group = 'PD array')
+PDtxtCss = input.color(color.silver, 'Text Color', group = 'PD array')
+PDSCss = input.color(color.silver, 'Swing Line Color', group = 'PD array')
+
+//Take profit
+iTP = input.bool(false, title = 'Enable TP', inline = 'RR', group = 'TP')
+tpCss = input.color(#2157f3, title = '', inline = 'RR', group = 'TP')
+R1a = input.float(1, title = 'R:R 1', minval = 1, maxval = 1, inline = 'RR1', group = 'TP')
+R2a = input.float(2, title = ':', minval = .2, step = .1, inline = 'RR1', group = 'TP')
+R1b = input.float(1, title = 'R:R 2', minval = 1, maxval = 1, inline = 'RR2', group = 'TP')
+R2b = input.float(3, title = ':', minval = .2, step = .1, inline = 'RR2', group = 'TP')
+R1c = input.float(1, title = 'R:R 3', minval = 1, maxval = 1, inline = 'RR3', group = 'TP')
+R2c = input.float(4, title = ':', minval = .2, step = .1, inline = 'RR3', group = 'TP')
+
+//Colors
+cBBplusA = input.color(color.rgb(181, 12, 181, 75), title = '     ', inline = 'bl', group = 'Colors    +BB                   Last Swings')
+cBBplusB = input.color(color.rgb(12, 181, 26, 53), title = '', inline = 'bl', group = 'Colors    +BB                   Last Swings')
+cSwingBl = input.color(color.rgb(255, 82, 82, 81), title = '        ', inline = 'bl', group = 'Colors    +BB                   Last Swings')
+cBB_minA = input.color(color.rgb(255, 17, 0, 95), title = '     ', inline = 'br', group = 'Colors    -BB                   Last Swings')
+cBB_minB = input.color(color.rgb(255, 17, 0, 50), title = '', inline = 'br', group = 'Colors    -BB                   Last Swings')
+cSwingBr = input.color(color.rgb(0, 137, 123, 85), title = '        ', inline = 'br', group = 'Colors    -BB                   Last Swings')
+
+_arrowup = '▲'
+_arrowdn = '▼'
+_c = '●'
+_x = '❌'
+
+//-----------------------------------------------------------------------------}
+//General Calculations
+//-----------------------------------------------------------------------------{
+per = last_bar_index - bar_index <= 2000
+mx = math.max(close, open)
+mn = math.min(close, open)
+atr = ta.atr(10)
+n = bar_index
+hi = high
+lo = low
+mCxSize = 50
+
+//-----------------------------------------------------------------------------}
+//User Defined Types
+//-----------------------------------------------------------------------------{
+type ZZ
+    array<int> d
+    array<int> x
+    array<float> y
+    array<line> l
+    array<bool> b
+
+type mss
+    int dir
+    array<line> l_mssBl
+    array<line> l_mssBr
+    array<line> l_bosBl
+    array<line> l_bosBr
+    array<label> lbMssBl
+    array<label> lbMssBr
+    array<label> lbBosBl
+    array<label> lbBosBr
+
+type block
+    int dir
+    bool Broken
+    bool Mitigated
+    box BB_boxA
+    box BB_boxB
+    line BB_line
+    box FVG_box
+    line line_1
+    line line_2
+    bool Broken_1
+    bool Broken_2
+    box PDa_boxA
+    box PDa_boxB
+    box PDa_box1
+    line PDaLine1
+    label PDaLab_1
+    box PDa_box2
+    line PDaLine2
+    label PDaLab_2
+    bool PDbroken1
+    bool PDbroken2
+    line TP1_line
+    line TP2_line
+    line TP3_line
+    bool TP1_hit
+    bool TP2_hit
+    bool TP3_hit
+    bool scalp
+    label HL
+    array<label> aLabels
+
+//-----------------------------------------------------------------------------}
+//Variables
+//-----------------------------------------------------------------------------{
+BBplus = 0
+signUP = 1
+cnclUP = 2
+LL1break = 3
+LL2break = 4
+SW1breakUP = 5
+SW2breakUP = 6
+tpUP1 = 7
+tpUP2 = 8
+tpUP3 = 9
+BB_endBl = 10
+BB_min = 11
+signDN = 12
+cnclDN = 13
+HH1break = 14
+HH2break = 15
+SW1breakDN = 16
+SW2breakDN = 17
+tpDN1 = 18
+tpDN2 = 19
+tpDN3 = 20
+BB_endBr = 21
+
+signals = array.from(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+
+var array<block> aBlockBl = array.new<block>()
+var array<block> aBlockBr = array.new<block>()
+//
+// NOTE: boolean array initial value must be true/false in v6 (cannot be na)
+var ZZ aZZ = ZZ.new(
+     array.new<int>(mCxSize, 0),
+     array.new<int>(mCxSize, 0),
+     array.new<float>(mCxSize, na),
+     array.new<line>(mCxSize, na),
+     array.new<bool>(mCxSize, false))   // <-- changed from na to false
+    
+
+var mss MSS = mss.new(0, array.new<line>(), array.new<line>(), array.new<line>(), array.new<line>(), array.new<label>(), array.new<label>(), array.new<label>(), array.new<label>())
+
+// For BB block, initialize aLabels empty (push labels when created)
+var block BB = block.new(
+     BB_boxA = box.new(na, na, na, na, border_color = color(na)),
+     BB_boxB = box.new(na, na, na, na, border_color = color(na), text_size = size.normal, text_halign = text.align_right, text_font_family = font.family_monospace),
+     BB_line = line.new(na, na, na, na, style = line.style_dashed, color = color.silver),
+     PDa_box1 = box.new(na, na, na, na, border_color = color(na)),
+     PDaLine1 = line.new(na, na, na, na, color = PDSCss),
+     PDaLab_1 = label.new(na, na, color = color(na)),
+     PDa_box2 = box.new(na, na, na, na, border_color = color(na)),
+     PDaLine2 = line.new(na, na, na, na, color = PDSCss),
+     PDaLab_2 = label.new(na, na, color = color(na)),
+     line_1 = line.new(na, na, na, na, color = PDSCss),
+     line_2 = line.new(na, na, na, na, color = PDSCss),
+     TP1_line = line.new(na, na, na, na, color = tpCss),
+     TP2_line = line.new(na, na, na, na, color = tpCss),
+     TP3_line = line.new(na, na, na, na, color = tpCss),
+     HL = label.new(na, na, color = color(na), textcolor = PDtxtCss, yloc = yloc.price),
+     aLabels = array.new<label>())   // <-- initialize empty (safer in v6)
+    
+
+
+
+//-----------------------------------------------------------------------------}
+//Functions/methods
+//-----------------------------------------------------------------------------{
+method in_out(ZZ aZZ, int d, int x1, float y1, int x2, float y2, color col, bool b) =>
+    aZZ.d.unshift(d)
+    aZZ.x.unshift(x2)
+    aZZ.y.unshift(y2)
+    aZZ.b.unshift(b)
+    aZZ.d.pop()
+    aZZ.x.pop()
+    aZZ.y.pop()
+    aZZ.b.pop()
+    if shZZ
+        aZZ.l.unshift(line.new(x1, y1, x2, y2, color = col))
+        aZZ.l.pop().delete()
+
+method io_box(array<box> aB, box b) =>
+    aB.unshift(b)
+    aB.pop().delete()
+
+method setLine(line ln, int x1, float y1, int x2, float y2) =>
+    ln.set_xy1(x1, y1)
+    ln.set_xy2(x2, y2)
+
+method notransp(color css) =>
+    color.rgb(color.r(css), color.g(css), color.b(css))
+
+createLab(string s, float y, color c, string t, string sz = size.normal) =>
+    label.new(n, y, style = s == 'c' ? label.style_label_center : s == 'u' ? label.style_label_up : label.style_label_down, textcolor = c, color = color(na), size = sz, text = t)
+
+draw(left, col) =>
+    max_bars_back(time, 1000)
+    var int dir = na
+    var int x1 = na
+    var float y1 = na
+    var int x2 = na
+    var float y2 = na
+
+    sz = aZZ.d.size()
+    x2 := bar_index - 1
+    ph = ta.pivothigh(hi, left, 1)
+    pl = ta.pivotlow(lo, left, 1)
+
+    if not na(ph)
+        dir := aZZ.d.get(0)
+        x1 := aZZ.x.get(0)
+        y1 := aZZ.y.get(0)
+        y2 := nz(hi[1])
+
+        if dir < 1  // if previous point was a pl, add, and change direction (1)
+            aZZ.in_out(1, x1, y1, x2, y2, col, true)
+        else if dir == 1 and ph > y1
+            aZZ.x.set(0, x2)
+            aZZ.y.set(0, y2)
+            if shZZ
+                aZZ.l.get(0).set_xy2(x2, y2)
+
+    if not na(pl)
+        dir := aZZ.d.get(0)
+        x1 := aZZ.x.get(0)
+        y1 := aZZ.y.get(0)
+        y2 := nz(lo[1])
+
+        if dir > -1  // if previous point was a ph, add, and change direction (-1)
+            aZZ.in_out(-1, x1, y1, x2, y2, col, true)
+        else if dir == -1 and pl < y1
+            aZZ.x.set(0, x2)
+            aZZ.y.set(0, y2)
+            if shZZ
+                aZZ.l.get(0).set_xy2(x2, y2)
+
+    iH = aZZ.d.get(2) == 1 ? 2 : 1
+    iL = aZZ.d.get(2) == -1 ? 2 : 1
+
+    // MSS Bullish / Bearish switch-cases
+    switch
+        // MSS Bullish
+        close > aZZ.y.get(iH) and aZZ.d.get(iH) == 1 and MSS.dir < 1 and per =>
+            Ex = aZZ.x.get(iH - 1)
+            Ey = aZZ.y.get(iH - 1)
+            Dx = aZZ.x.get(iH)
+            Dy = aZZ.y.get(iH)
+            DyMx = mx[n - Dx]
+            Cx = aZZ.x.get(iH + 1)
+            Cy = aZZ.y.get(iH + 1)
+            Bx = aZZ.x.get(iH + 2)
+            By = aZZ.y.get(iH + 2)
+            ByMx = mx[n - Bx]
+            Ax = aZZ.x.get(iH + 3)
+            Ay = aZZ.y.get(iH + 3)
+            AyMn = mn[n - Ax]
+            _y = math.max(ByMx, DyMx)
+            mid = AyMn + (_y - AyMn) / 2  // 50% fib A- min(B, D)
+            isOK = onlyWhenInPDarray ? Ay < Cy and Ay < Ey and Ey < mid : true
+
+            float green1prT = na
+            float green1prB = na
+            float avg = na
+
+            if Ey < Cy and Cx != Dx and isOK
+                // latest HH to 1 HH further -> search first green bar
+                for i = n - Dx to n - Cx by 1
+                    if close[i] > open[i]
+                        // reset previous swing box's
+                        BB.PDa_box1.set_lefttop(na, na)
+                        BB.PDaLine1.set_xy1(na, na)
+                        BB.PDaLab_1.set_xy(na, na)
+                        BB.PDa_box2.set_lefttop(na, na)
+                        BB.PDaLine2.set_xy1(na, na)
+                        BB.PDaLab_2.set_xy(na, na)
+
+                        green1idx = n - i
+                        green1prT := breakerCandleOnlyBody ? mx[i] : high[i]
+                        green1prB := breakerCandleOnlyBody ? mn[i] : low[i]
+                        if breakerCandle_2Last
+                            if close[i + 1] > open[i + 1]
+                                green2prT = breakerCandleOnlyBody ? mx[i + 1] : high[i + 1]
+                                green2prB = breakerCandleOnlyBody ? mn[i + 1] : low[i + 1]
+                                if green2prT > green1prT or green2prB < green1prB
+                                    green1idx := green1idx - 1
+                                green1prT := math.max(green1prT, green2prT)
+                                green1prB := math.min(green1prB, green2prB)
+
+                        // Breaker Block +
+                        avg := math.avg(green1prB, green1prT)
+                        while BB.aLabels.size() > 0
+                            BB.aLabels.pop().delete()
+                        BB.PDa_boxA.delete()
+                        BB.PDa_boxB.delete()
+                        BB.dir := 1
+                        BB.BB_boxA.set_left(green1idx)
+                        BB.BB_boxA.set_top(green1prT)
+                        BB.BB_boxA.set_right(n)
+                        BB.BB_boxA.set_bottom(green1prB)
+                        BB.BB_boxA.set_bgcolor(cBBplusA)
+
+                        BB.BB_boxB.set_left(n)
+                        BB.BB_boxB.set_top(green1prT)
+                        BB.BB_boxB.set_right(n + 8)
+                        BB.BB_boxB.set_bottom(green1prB)
+                        BB.BB_boxB.set_bgcolor(cBBplusB)
+                        BB.BB_boxB.set_text('+BB')
+                        BB.BB_boxB.set_text_color(cBBplusB.notransp())
+                        BB.BB_boxB.set_text_valign(text.align_bottom)
+
+                        BB.BB_line.set_xy1(n, avg)
+                        BB.BB_line.set_xy2(n, avg)
+
+                        if showSPD
+                            BB.line_1.set_xy1(Cx, Cy)
+                            BB.line_1.set_xy2(n, Cy)
+                            BB.Broken_1 := false
+                            BB.line_2.set_xy1(Ex, Ey)
+                            BB.line_2.set_xy2(n, Ey)
+                            BB.Broken_2 := false
+                            BB.HL.set_xy(Ex, Ey)
+                            BB.HL.set_style(label.style_label_up)
+                            BB.HL.set_text('LL')
+
+                        BB.TP1_hit := false
+                        BB.TP2_hit := false
+                        BB.TP3_hit := false
+                        BB.Broken := false
+                        BB.Mitigated := false
+                        BB.scalp := false
+                        BB.PDbroken1 := false
+                        BB.PDbroken2 := false
+
+                        if onlyWhenInPDarray and showPDarray
+                            BB.PDa_boxA := box.new(Ax, mid, Ex + 1, AyMn, bgcolor = color.rgb(132, 248, 171, 90), border_color = color(na), text = 'Discount PD Array', text_size = size.normal, text_color = color.rgb(132, 248, 171, 25), text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
+                            BB.PDa_boxB := box.new(Ax, _y, Ex + 1, mid, bgcolor = color.rgb(248, 153, 132, 90), border_color = color(na))
+
+                        // Previous swings
+                        cnt = 0
+                        hh1 = high
+                        for c = 0 to sz - 2 by 1
+                            getX = aZZ.x.get(c)
+                            getY = aZZ.y.get(c)
+                            if getY > hh1 and aZZ.d.get(c) == 1 and showSPD
+                                getY2 = (high[n - getX] - mn[n - getX]) / 4
+                                switch cnt
+                                    0 =>
+                                        BB.PDa_box1.set_lefttop(getX, getY)
+                                        BB.PDaLine1.set_xy1(getX, getY)
+                                        BB.PDa_box1.set_rightbottom(n, getY - getY2)
+                                        BB.PDaLine1.set_xy2(n, getY)
+                                        BB.PDa_box1.set_bgcolor(cSwingBl)
+                                        BB.PDaLab_1.set_xy(getX, getY)
+                                        BB.PDaLab_1.set_size(size.normal)
+                                        BB.PDaLab_1.set_textcolor(PDtxtCss)
+                                        BB.PDaLab_1.set_text('Premium PD Array')
+                                        BB.PDaLab_1.set_style(label.style_label_lower_left)
+                                        cnt := 1
+                                        hh1 := getY
+                                    1 =>
+                                        if getY - getY2 > hh1
+                                            BB.PDa_box2.set_lefttop(getX, getY)
+                                            BB.PDaLine2.set_xy1(getX, getY)
+                                            BB.PDa_box2.set_rightbottom(n, getY - getY2)
+                                            BB.PDaLine2.set_xy2(n, getY)
+                                            BB.PDa_box2.set_bgcolor(cSwingBl)
+                                            BB.PDaLab_2.set_xy(getX, getY)
+                                            BB.PDaLab_2.set_size(size.normal)
+                                            BB.PDaLab_2.set_textcolor(PDtxtCss)
+                                            BB.PDaLab_2.set_text('Premium PD Array')
+                                            BB.PDaLab_2.set_style(label.style_label_lower_left)
+                                            cnt := 2
+                            if cnt == 2
+                                break
+
+                        I = green1prT - green1prB
+                        E1 = green1prT + I * R2a / R1a
+                        E2 = green1prT + I * R2b / R1b
+                        E3 = green1prT + I * R2c / R1c
+
+                        if iTP
+                            if not BB.TP1_hit
+                                BB.TP1_line.set_xy1(n, E1)
+                                BB.TP1_line.set_xy2(n + 20, E1)
+                            if not BB.TP2_hit
+                                BB.TP2_line.set_xy1(n, E2)
+                                BB.TP2_line.set_xy2(n + 20, E2)
+                            if not BB.TP3_hit
+                                BB.TP3_line.set_xy1(n, E3)
+                                BB.TP3_line.set_xy2(n + 20, E3)
+
+                        signals.set(BBplus, true)
+                        alert('+BB', alert.freq_once_per_bar_close)
+                        BB.aLabels.unshift(createLab('u', low, cBBplusB.notransp(), _arrowup, size.large))
+
+                        break
+
+            MSS.dir := 1
+            MSS.dir
+
+        // MSS Bearish
+        close < aZZ.y.get(iL) and aZZ.d.get(iL) == -1 and MSS.dir > -1 and per =>
+            Ex = aZZ.x.get(iL - 1)
+            Ey = aZZ.y.get(iL - 1)
+            Dx = aZZ.x.get(iL)
+            Dy = aZZ.y.get(iL)
+            DyMn = mn[n - Dx]
+            Cx = aZZ.x.get(iL + 1)
+            Cy = aZZ.y.get(iL + 1)
+            Bx = aZZ.x.get(iL + 2)
+            By = aZZ.y.get(iL + 2)
+            ByMn = mn[n - Bx]
+            Ax = aZZ.x.get(iL + 3)
+            Ay = aZZ.y.get(iL + 3)
+            AyMx = mx[n - Ax]
+            _y = math.min(ByMn, DyMn)
+            mid = AyMx - (AyMx - _y) / 2  // 50% fib A- min(B, D)
+            isOK = onlyWhenInPDarray ? Ay > Cy and Ay > Ey and Ey > mid : true
+
+            float red_1_prT = na
+            float red_1_prB = na
+            float avg = na
+
+            if Ey > Cy and Cx != Dx and isOK
+                // latest LL to LL further -> search first red bar
+                for i = n - Dx to n - Cx by 1
+                    if close[i] < open[i]
+                        // reset previous swing box's
+                        BB.PDa_box1.set_lefttop(na, na)
+                        BB.PDaLine1.set_xy1(na, na)
+                        BB.PDaLab_1.set_xy(na, na)
+                        BB.PDa_box2.set_lefttop(na, na)
+                        BB.PDaLine2.set_xy1(na, na)
+                        BB.PDaLab_2.set_xy(na, na)
+
+                        red_1_idx = n - i
+                        red_1_prT := breakerCandleOnlyBody ? mx[i] : high[i]
+                        red_1_prB := breakerCandleOnlyBody ? mn[i] : low[i]
+                        if breakerCandle_2Last
+                            if close[i + 1] < open[i + 1]
+                                red_2_prT = breakerCandleOnlyBody ? mx[i + 1] : high[i + 1]
+                                red_2_prB = breakerCandleOnlyBody ? mn[i + 1] : low[i + 1]
+                                if red_2_prT > red_1_prT or red_2_prB < red_1_prB
+                                    red_1_idx := red_1_idx - 1
+                                red_1_prT := math.max(red_1_prT, red_2_prT)
+                                red_1_prB := math.min(red_1_prB, red_2_prB)
+
+                        // Breaker Block -
+                        avg := math.avg(red_1_prB, red_1_prT)
+                        while BB.aLabels.size() > 0
+                            BB.aLabels.pop().delete()
+                        BB.PDa_boxA.delete()
+                        BB.PDa_boxB.delete()
+                        BB.dir := -1
+                        BB.BB_boxA.set_left(red_1_idx)
+                        BB.BB_boxA.set_top(red_1_prT)
+                        BB.BB_boxA.set_right(n)
+                        BB.BB_boxA.set_bottom(red_1_prB)
+                        BB.BB_boxA.set_bgcolor(cBB_minA)
+
+                        BB.BB_boxB.set_left(n)
+                        BB.BB_boxB.set_top(red_1_prT)
+                        BB.BB_boxB.set_right(n + 8)
+                        BB.BB_boxB.set_bottom(red_1_prB)
+                        BB.BB_boxB.set_bgcolor(cBB_minB)
+                        BB.BB_boxB.set_text('-BB')
+                        BB.BB_boxB.set_text_color(cBB_minB.notransp())
+                        BB.BB_boxB.set_text_valign(text.align_top)
+
+                        BB.BB_line.set_xy1(n, avg)
+                        BB.BB_line.set_xy2(n, avg)
+
+                        if showSPD
+                            BB.line_1.set_xy1(Cx, Cy)
+                            BB.line_1.set_xy2(n, Cy)
+                            BB.Broken_1 := false
+                            BB.line_2.set_xy1(Ex, Ey)
+                            BB.line_2.set_xy2(n, Ey)
+                            BB.Broken_2 := false
+                            BB.HL.set_xy(Ex, Ey)
+                            BB.HL.set_style(label.style_label_down)
+                            BB.HL.set_text('HH')
+                            BB.HL.set_textcolor(PDtxtCss)
+
+                        BB.TP1_hit := false
+                        BB.TP2_hit := false
+                        BB.TP3_hit := false
+                        BB.Broken := false
+                        BB.Mitigated := false
+                        BB.scalp := false
+                        BB.PDbroken1 := false
+                        BB.PDbroken2 := false
+
+                        if onlyWhenInPDarray and showPDarray
+                            BB.PDa_boxA := box.new(Ax, AyMx, Ex + 1, mid, bgcolor = color.rgb(248, 153, 132, 90), border_color = color(na), text = 'Premium PD Array', text_size = size.normal, text_color = color.rgb(248, 153, 132, 25), text_halign = text.align_right, text_valign = text.align_center, text_font_family = font.family_monospace)
+                            BB.PDa_boxB := box.new(Ax, mid, Ex + 1, _y, bgcolor = color.rgb(132, 248, 171, 90), border_color = color(na))
+
+                        // Previous swings
+                        cnt = 0
+                        ll1 = low
+                        for c = 0 to sz - 2 by 1
+                            getX = aZZ.x.get(c)
+                            getY = aZZ.y.get(c)
+                            if getY < ll1 and aZZ.d.get(c) == -1 and showSPD
+                                getY2 = (mx[n - getX] - low[n - getX]) / 4
+                                switch cnt
+                                    0 =>
+                                        BB.PDa_box1.set_lefttop(getX, getY + getY2)
+                                        BB.PDaLine1.set_xy1(getX, getY)
+                                        BB.PDa_box1.set_rightbottom(n, getY)
+                                        BB.PDaLine1.set_xy2(n, getY)
+                                        BB.PDa_box1.set_bgcolor(cSwingBr)
+                                        BB.PDaLab_1.set_xy(getX, getY)
+                                        BB.PDaLab_1.set_size(size.normal)
+                                        BB.PDaLab_1.set_textcolor(PDtxtCss)
+                                        BB.PDaLab_1.set_text('Discount PD Array')
+                                        BB.PDaLab_1.set_style(label.style_label_upper_left)
+                                        cnt := 1
+                                        ll1 := getY
+                                    1 =>
+                                        if getY + getY2 < ll1
+                                            BB.PDa_box2.set_lefttop(getX, getY + getY2)
+                                            BB.PDaLine2.set_xy1(getX, getY)
+                                            BB.PDa_box2.set_rightbottom(n, getY)
+                                            BB.PDaLine2.set_xy2(n, getY)
+                                            BB.PDa_box2.set_bgcolor(cSwingBr)
+                                            BB.PDaLab_2.set_xy(getX, getY)
+                                            BB.PDaLab_2.set_size(size.normal)
+                                            BB.PDaLab_2.set_textcolor(PDtxtCss)
+                                            BB.PDaLab_2.set_text('Discount PD Array')
+                                            BB.PDaLab_2.set_style(label.style_label_upper_left)
+                                            cnt := 2
+                            if cnt == 2
+                                break
+
+                        I = red_1_prT - red_1_prB
+                        E1 = red_1_prB - I * R2a / R1a
+                        E2 = red_1_prB - I * R2b / R1b
+                        E3 = red_1_prB - I * R2c / R1c
+
+                        if iTP
+                            if not BB.TP1_hit
+                                BB.TP1_line.set_xy1(n, E1)
+                                BB.TP1_line.set_xy2(n + 20, E1)
+                            if not BB.TP2_hit
+                                BB.TP2_line.set_xy1(n, E2)
+                                BB.TP2_line.set_xy2(n + 20, E2)
+                            if not BB.TP3_hit
+                                BB.TP3_line.set_xy1(n, E3)
+                                BB.TP3_line.set_xy2(n + 20, E3)
+
+                        signals.set(BB_min, true)
+                        alert('-BB', alert.freq_once_per_bar_close)
+                        BB.aLabels.unshift(createLab('d', high, cBB_minB.notransp(), _arrowdn, size.large))
+
+                        break
+
+            MSS.dir := -1
+            MSS.dir
+
+
+//-----------------------------------------------------------------------------}
+//Calculations
+//-----------------------------------------------------------------------------{
+draw(len, tpCss)
+
+
+lft = BB.BB_boxB.get_left()
+top = BB.BB_boxB.get_top()
+btm = BB.BB_boxB.get_bottom()
+avg = BB.BB_line.get_y2()
+l_1 = BB.line_1.get_y2()
+l_2 = BB.line_2.get_y2()
+TP1 = BB.TP1_line.get_y2()
+TP2 = BB.TP2_line.get_y2()
+TP3 = BB.TP3_line.get_y2()
+switch BB.dir 
+    1 => 
+        if not BB.Mitigated
+            if close < btm
+                // --- price has fully closed through bullish BB: clear / remove / hide all painting & memory ---
+                BB.Mitigated := true
+                signals.set(BB_endBl, true)
+                alert('+BB Mitigated', alert.freq_once_per_bar_close)
+
+                // small mitigated marker
+                BB.aLabels.unshift(createLab('u', low, color.yellow, _c))
+
+                // stop extending and immediately clear visuals from chart and memory:
+                // clear boxes and lines (use set_... to na so subsequent get_xxx calls are safe)
+                BB.BB_boxB.set_right(n)
+                BB.BB_line.set_x2(n)
+
+                // remove paint: set coords to na and clear colors/text
+                BB.BB_boxA.set_lefttop(na, na)
+                BB.BB_boxA.set_rightbottom(na, na)
+                BB.BB_boxA.set_bgcolor(color(na))
+                BB.BB_boxB.set_lefttop(na, na)
+                BB.BB_boxB.set_rightbottom(na, na)
+                BB.BB_boxB.set_bgcolor(color(na))
+                BB.BB_boxB.set_text('')
+                BB.BB_boxB.set_text_color(color(na))
+
+                BB.BB_line.set_xy1(na, na)
+                BB.BB_line.set_xy2(na, na)
+
+                // clear TP lines
+                BB.TP1_line.set_xy1(na, na)
+                BB.TP1_line.set_xy2(na, na)
+                BB.TP2_line.set_xy1(na, na)
+                BB.TP2_line.set_xy2(na, na)
+                BB.TP3_line.set_xy1(na, na)
+                BB.TP3_line.set_xy2(na, na)
+
+                // clear PD array visuals
+                BB.PDa_box1.set_lefttop(na, na)
+                BB.PDa_box1.set_rightbottom(na, na)
+                BB.PDa_box1.set_bgcolor(color(na))
+                BB.PDa_box2.set_lefttop(na, na)
+                BB.PDa_box2.set_rightbottom(na, na)
+                BB.PDa_box2.set_bgcolor(color(na))
+                BB.PDaLine1.set_xy1(na, na)
+                BB.PDaLine1.set_xy2(na, na)
+                BB.PDaLine2.set_xy1(na, na)
+                BB.PDaLine2.set_xy2(na, na)
+                BB.PDaLab_1.set_xy(na, na)
+                BB.PDaLab_2.set_xy(na, na)
+
+                // delete any stored labels in the aLabels array
+                while BB.aLabels.size() > 0
+                    BB.aLabels.pop().delete()
+
+                // mark dir zero so breaker logic no longer runs on this block
+                BB.dir := 0
+
+            else
+                BB.BB_boxB.set_right(n + 8)
+                BB.BB_line.set_x2(n + 8)
+
+            BB.TP1_line.set_x2(n)
+            BB.TP2_line.set_x2(n)
+            BB.TP3_line.set_x2(n)
+
+            if n > BB.BB_boxB.get_left()
+                if not BB.Broken
+                    if BB.scalp
+                        if not BB.TP1_hit and open < TP1 and high > TP1
+                            BB.TP1_hit := true
+                            signals.set(tpUP1, true)
+                            alert('TP UP 1', alert.freq_once_per_bar)
+                            BB.aLabels.unshift(createLab('c', TP1, #ff00dd, _c))
+                        if not BB.TP2_hit and open < TP2 and high > TP2
+                            BB.TP2_hit := true
+                            signals.set(tpUP2, true)
+                            alert('TP UP 2', alert.freq_once_per_bar)
+                            BB.aLabels.unshift(createLab('c', TP2, #ff00dd, _c))
+                        if not BB.TP3_hit and open < TP3 and high > TP3
+                            BB.TP3_hit := true
+                            signals.set(tpUP3, true)
+                            alert('TP UP 3', alert.freq_once_per_bar)
+                            BB.aLabels.unshift(createLab('c', TP3, #ff00dd, _c))
+                    switch 
+                        open > avg and open < top and close > top => 
+                            BB.TP1_hit := false
+                            BB.TP2_hit := false
+                            BB.TP3_hit := false
+                            BB.scalp := true
+                            signals.set(signUP, true)
+                            alert('signal UP', alert.freq_once_per_bar_close)
+                            BB.aLabels.unshift(createLab('u', low, color.lime, _arrowup, size.normal))
+                        close < avg and close > btm => 
+                            BB.Broken := true
+                            BB.scalp := false
+                            signals.set(cnclUP, true)
+                            alert('cancel UP', alert.freq_once_per_bar_close)
+                            BB.aLabels.unshift(createLab('u', low, color.orange, _x))
+                else // reset
+                    if not tillFirstBreak and close > top
+                        BB.Broken := false
+                        BB.scalp := true
+                        signals.set(BBplus, true)
+                        alert('+BB (R)', alert.freq_once_per_bar_close)
+                        BB.aLabels.unshift(createLab('u', low, color.blue, 'R', size.normal))
+
+        if not BB.Broken_1
+            BB.line_1.set_x2(n)
+            if close < l_1
+                BB.Broken_1 := true
+                signals.set(LL1break, true)
+                alert('LL 1 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+        if not BB.Broken_2
+            BB.line_2.set_x2(n)
+            if close < l_2
+                BB.Broken_2 := true
+                signals.set(LL2break, true)
+                alert('LL 2 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+
+        if not BB.PDbroken1
+            BB.PDa_box1.set_right(n)
+            BB.PDaLine1.set_x2(n)
+            if close > BB.PDa_box1.get_top() and n > BB.PDa_box1.get_left()
+                BB.PDbroken1 := true
+                signals.set(SW1breakUP, true)
+                alert('Swing UP 1 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+        if not BB.PDbroken2
+            BB.PDa_box2.set_right(n)
+            BB.PDaLine2.set_x2(n)
+            if close > BB.PDa_box2.get_top() and n > BB.PDa_box2.get_left()
+                BB.PDbroken2 := true
+                signals.set(SW2breakUP, true)
+                alert('Swing UP 2 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+    -1 => 
+
+        if not BB.Mitigated
+            if close > top
+                // --- price has fully closed through bearish BB: clear / remove / hide all painting & memory ---
+                BB.Mitigated := true
+                signals.set(BB_endBr, true)
+                alert('-BB Mitigated', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('d', high, cBB_minB.notransp(), _c))
+
+                // stop extending then clear visuals and memory
+                BB.BB_boxB.set_right(n)
+                BB.BB_line.set_x2(n)
+
+                BB.BB_boxA.set_lefttop(na, na)
+                BB.BB_boxA.set_rightbottom(na, na)
+                BB.BB_boxA.set_bgcolor(color(na))
+                BB.BB_boxB.set_lefttop(na, na)
+                BB.BB_boxB.set_rightbottom(na, na)
+                BB.BB_boxB.set_bgcolor(color(na))
+                BB.BB_boxB.set_text('')
+                BB.BB_boxB.set_text_color(color(na))
+
+                BB.BB_line.set_xy1(na, na)
+                BB.BB_line.set_xy2(na, na)
+
+                // clear TP lines
+                BB.TP1_line.set_xy1(na, na)
+                BB.TP1_line.set_xy2(na, na)
+                BB.TP2_line.set_xy1(na, na)
+                BB.TP2_line.set_xy2(na, na)
+                BB.TP3_line.set_xy1(na, na)
+                BB.TP3_line.set_xy2(na, na)
+
+                // clear PD visuals
+                BB.PDa_box1.set_lefttop(na, na)
+                BB.PDa_box1.set_rightbottom(na, na)
+                BB.PDa_box1.set_bgcolor(color(na))
+                BB.PDa_box2.set_lefttop(na, na)
+                BB.PDa_box2.set_rightbottom(na, na)
+                BB.PDa_box2.set_bgcolor(color(na))
+                BB.PDaLine1.set_xy1(na, na)
+                BB.PDaLine1.set_xy2(na, na)
+                BB.PDaLine2.set_xy1(na, na)
+                BB.PDaLine2.set_xy2(na, na)
+                BB.PDaLab_1.set_xy(na, na)
+                BB.PDaLab_2.set_xy(na, na)
+
+                // delete stored labels
+                while BB.aLabels.size() > 0
+                    BB.aLabels.pop().delete()
+
+                // ensure no further breaker logic runs for this block
+                BB.dir := 0
+
+            else
+                BB.BB_boxB.set_right(n + 8)
+                BB.BB_line.set_x2(n + 8)
+
+            BB.TP1_line.set_x2(n)
+            BB.TP2_line.set_x2(n)
+            BB.TP3_line.set_x2(n)
+
+            if n > BB.BB_boxB.get_left()
+                if not BB.Broken
+                    if BB.scalp
+                        if not BB.TP1_hit and open > TP1 and low < TP1
+                            BB.TP1_hit := true
+                            signals.set(tpDN1, true)
+                            alert('TP DN 1', alert.freq_once_per_bar)
+                            BB.aLabels.unshift(createLab('c', TP1, #ff00dd, _c))
+                        if not BB.TP2_hit and open > TP2 and low < TP2
+                            BB.TP2_hit := true
+                            signals.set(tpDN2, true)
+                            alert('TP DN 2', alert.freq_once_per_bar)
+                            BB.aLabels.unshift(createLab('c', TP2, #ff00dd, _c))
+                        if not BB.TP3_hit and open > TP3 and low < TP3
+                            BB.TP3_hit := true
+                            signals.set(tpDN3, true)
+                            alert('TP DN 3', alert.freq_once_per_bar)
+                            BB.aLabels.unshift(createLab('c', TP3, #ff00dd, _c))
+                    switch 
+                        open < avg and open > btm and close < btm => 
+                            BB.TP1_hit := false
+                            BB.TP2_hit := false
+                            BB.TP3_hit := false
+                            BB.scalp := true
+                            signals.set(signDN, true)
+                            alert('signal DN', alert.freq_once_per_bar_close)
+                            BB.aLabels.unshift(createLab('d', high, color.orange, _arrowdn, size.normal))
+                        close > avg and close < top => 
+                            BB.Broken := true
+                            BB.scalp := false
+                            signals.set(cnclDN, true)
+                            alert('cancel DN', alert.freq_once_per_bar_close)
+                            BB.aLabels.unshift(createLab('d', high, color.red, _x))
+                else // reset
+                    if not tillFirstBreak and close < btm
+                        BB.Broken := false
+                        BB.scalp := true
+                        signals.set(BB_min, true)
+                        alert('-BB (R)', alert.freq_once_per_bar_close)
+                        BB.aLabels.unshift(createLab('d', high, color.blue, 'R', size.normal))
+
+        if not BB.Broken_1
+            BB.line_1.set_x2(n)
+            if close > l_1
+                BB.Broken_1 := true
+                signals.set(HH1break, true)
+                alert('HH 1 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+        if not BB.Broken_2
+            BB.line_2.set_x2(n)
+            if close > l_2
+                BB.Broken_2 := true
+                signals.set(HH2break, true)
+                alert('HH 2 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', high, #c00000, _c))
+
+        if not BB.PDbroken1
+            BB.PDa_box1.set_right(n)
+            BB.PDaLine1.set_x2(n)
+            if close < BB.PDa_box1.get_bottom() and n > BB.PDa_box1.get_left()
+                BB.PDbroken1 := true
+                signals.set(SW1breakDN, true)
+                alert('Swing DN 1 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+        if not BB.PDbroken2
+            BB.PDa_box2.set_right(n)
+            BB.PDaLine2.set_x2(n)
+            if close < BB.PDa_box2.get_bottom() and n > BB.PDa_box2.get_left()
+                BB.PDbroken2 := true
+                signals.set(SW2breakDN, true)
+                alert('Swing DN 2 break', alert.freq_once_per_bar_close)
+                if showBreaks
+                    BB.aLabels.unshift(createLab('c', low, #c00000, _c))
+
+//-----------------------------------------------------------------------------}
+//Alerts
+//-----------------------------------------------------------------------------{
+alertcondition(signals.get(BBplus), ' 1. +BB', '1. +BB')
+alertcondition(signals.get(signUP), ' 2. signal UP', '2. signal UP')
+alertcondition(signals.get(tpUP1), ' 3. TP UP 1', '3. TP UP 1')
+alertcondition(signals.get(tpUP2), ' 3. TP UP 2', '3. TP UP 2')
+alertcondition(signals.get(tpUP3), ' 3. TP UP 3', '3. TP UP 3')
+alertcondition(signals.get(cnclUP), ' 4. cancel UP', '4. cancel UP')
+alertcondition(signals.get(BB_endBl), ' 5. +BB Mitigated', '5. +BB Mitigated')
+alertcondition(signals.get(LL1break), ' 6. LL 1 Break', '6. LL 1 Break')
+alertcondition(signals.get(LL2break), ' 6. LL 2 Break', '6. LL 2 Break')
+alertcondition(signals.get(SW1breakUP), ' 7. Swing UP 1 Break', '7. Swing UP 1 Break')
+alertcondition(signals.get(SW2breakUP), ' 7. Swing UP 2 Break', '7. Swing UP 2 Break')
+
+alertcondition(signals.get(BB_min), '1. -BB', '1. -BB')
+alertcondition(signals.get(signDN), '2. signal DN', '2. signal DN')
+alertcondition(signals.get(tpDN1), '3. TP DN 1', '3. TP DN 1')
+alertcondition(signals.get(tpDN2), '3. TP DN 2', '3. TP DN 2')
+alertcondition(signals.get(tpDN3), '3. TP DN 3', '3. TP DN 3')
+alertcondition(signals.get(cnclDN), '4. cancel DN', '4. cancel DN')
+alertcondition(signals.get(BB_endBr), '5. -BB Mitigated', '5. -BB Mitigated')
+alertcondition(signals.get(HH1break), '6. HH 1 Break', '6. HH 1 Break')
+alertcondition(signals.get(HH2break), '6. HH 2 Break', '6. HH 2 Break')
+alertcondition(signals.get(SW1breakDN), '7. Swing DN 1 Break', '7. Swing DN 1 Break')
+alertcondition(signals.get(SW2breakDN), '7. Swing DN 2 Break', '7. Swing DN 2 Break')
+
+
+
+
+
+
+
+
+// ============
+// PLOT EMAS
+// ============
+
+// Exponential Moving Averages
+showEMA = input(false, title = 'Show EMAs', group = "EMAs")
+// User inputs for EMAs
+EMA1 = input.int(13, title = 'EMA 1', minval = 1, group = "EMAs")
+EMA2 = input.int(21, title = 'EMA 2', minval = 1, group = "EMAs")
+EMA3 = input.int(50, title = 'EMA 3', minval = 1, group = "EMAs")
+EMA4 = input.int(200, title = 'EMA 4', minval = 1, group = "EMAs")
+EMA5 = input.int(325, title = 'EMA 5', minval = 1, group = "EMAs")
+
+// User inputs for EMA colors
+EMA1Color = input.color(#d1c819b0, title = 'EMA 1 Color', group = "EMAs")
+EMA2Color = input.color(#d86010bc, title = 'EMA 2 Color', group = "EMAs")
+EMA3Color = input.color(#ea0404ba, title = 'EMA 3 Color', group = "EMAs")
+EMA4Color = input.color(color.rgb(83, 207, 16, 28), title = 'EMA 4 Color', group = "EMAs")
+EMA5Color = input.color(#d20eaeba, title = 'EMA 5 Color', group = "EMAs")
+
+// Plot EMAs with user toggle and customizable colors
+plot(showEMA ? ta.ema(close, EMA1) : na, title = 'EMA 1', color = color.new(EMA1Color, 70), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA2) : na, title = 'EMA 2', color = color.new(EMA2Color, 50), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA3) : na, title = 'EMA 3', color = color.new(EMA3Color, 40), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA4) : na, title = 'EMA 4', color = color.new(EMA4Color, 30), linewidth = 2)
+plot(showEMA ? ta.ema(close, EMA5) : na, title = 'EMA 5', color = color.new(EMA5Color, 20), linewidth = 2)
+
+
+
+// ========================================================================================
+// ADR ZONES
+// with credit to ATRvsDTR + ADR Zone + SSS50% by theStratuchiha
+// ========================================================================================
+
+
+//inputs
+// TimeFrame = input.timeframe('D', 'Timeframe for ATR Calculation', tooltip = 'Time you want ATR based on', group = 'ADR Zones')
+firstperColor = input.int(25, 'Percentage the color will change at', tooltip = 'first color it will change at based of parameter you set')
+secondperColor = input.int(50, 'Percentage color will change at', tooltip = 'Second color it will change at based of parameter you set')
+thirdperColor = input.int(75, 'Percentage color will change at', tooltip = 'third color it will change at based of parameter you set')
+lastperColor = input.int(100, 'Percentage color will change at', tooltip = 'last color it will change at based of parameter you set')
+normalcolor = input.color(color.gray, 'Normal color', tooltip = 'Standard color before percentage change thresholds')
+colorchangefirst = input.color(color.green, 'Color over First percentage', tooltip = 'color it will change based on Firstper')
+colorchangeSecond = input.color(color.yellow, 'Color over Second percentage', tooltip = 'color it will change based on Secondper')
+colorchangeThird = input.color(color.orange, 'Color over Third percentage', tooltip = 'color it will change based on Thirdper')
+colorchangeLast = input.color(color.red, 'Color over Last percentage', tooltip = 'color it will change based on Lastper')
+
+// BoxPlacement = input.string(position.bottom_right, 'Box Placement', options = [position.bottom_right, position.bottom_left, position.top_right, position.top_center, position.bottom_center])
+
+//Prepare a table
+// var table atrdtr = table.new(BoxPlacement, 3, 1, border_color = color.new(color.black, 25), border_width = 1)
+
+//Indicator math stuff
+// atr_ADR_Zones = request.security(syminfo.tickerid, TimeFrame, ta.atr(14))
+// atr_ADR_Zones_2 = math.round(atr_ADR_Zones, 2)
+// dtr = request.security(syminfo.tickerid, TimeFrame, math.round(high - low, 2))
+// atrp = math.round(dtr / atr_ADR_Zones * 100)
+
+
+//Draw Table
+// if barstate.islast
+//     table.cell(atrdtr, 0, 0, text = 'ATR: ' + str.tostring(atr_ADR_Zones_2))
+//     table.cell(atrdtr, 1, 0, text = 'DTR: ' + str.tostring(dtr))
+//     table.cell(atrdtr, 2, 0, text = str.tostring(atrp) + '%')
+//     if atrp > firstperColor
+//         table.set_bgcolor(atrdtr, colorchangefirst)
+//     if atrp > secondperColor
+//         table.set_bgcolor(atrdtr, colorchangeSecond)
+//     if atrp > thirdperColor
+//         table.set_bgcolor(atrdtr, colorchangeThird)
+//     if atrp > lastperColor
+//         table.set_bgcolor(atrdtr, colorchangeLast)
+
+
+
+//ADR side of script below
+text_ADR1_high = 'ADR1 Upper'
+text_ADR2_high = 'ADR2 Upper'
+
+text_ADR1_low = 'ADR1 Lower'
+text_ADR2_low = 'ADR2 Lower'
+
+// text_open = 'Open'
+// text_openWK = 'Open WK'
+
+// text_fitypercent = '50%'
+// text_fitypercent2 = '50% 2'
+
+
+var lime = #00FF00 //ADR2 Low
+var chartreuse = #80FF00 //ADR1 Low
+var orange = #FF8000 //ADR1 High
+var redorange = #FF4000 //ADR2 High
+var gray = #808080 //Open
+var red = #ff000052 ////50%
+var purple = #8d53ac54 ////second 50%
+var blue = #7df8ff52 ////Open WK
+
+
+
+//***Start of Inputs
+var labels_enabled = input.bool(defval = true, title = 'Show ADR labels')
+
+
+var adr_1 = input.int(title = 'ADR 1', defval = 10, minval = 1, group = 'ADR Periods')
+var adr_2 = input.int(title = 'ADR 2', defval = 5, minval = 1, group = 'ADR Periods')
+
+
+var color_ADR1_high = input.color(defval = color.new(orange, 0), title = text_ADR1_high, group = 'Colors')
+var color_ADR2_high = input.color(defval = color.new(redorange, 0), title = text_ADR2_high, group = 'Colors')
+
+var color_ADR1_low = input.color(defval = color.new(chartreuse, 0), title = text_ADR1_low, group = 'Colors')
+var color_ADR2_low = input.color(defval = color.new(lime, 0), title = text_ADR2_low, group = 'Colors')
+
+// var color_open = input.color(defval = color.new(gray, 20), title = text_open, group = 'Colors')
+// var color_openwk = input.color(defval = color.new(blue, 50), title = text_openWK, group = 'Colors')
+
+adrUppercolorfill = input.color(color.red, 'Adr Upper Zone Color', tooltip = 'Color of zone between Upper Adr 1 and 2')
+adrlowercolorfill = input.color(color.green, 'Adr lower Zone Color', tooltip = 'Color of zone between Lower Adr 1 and 2')
+
+// openofWK = input.bool(defval = false, title = 'Weekly Open')
+
+///////50% inputs
+
+// var fitypercentlineColor = input.color(defval = color.new(red, 50), title = text_fitypercent, group = 'SSS50%Rule')
+// fiftypercentTF = input.timeframe('D', 'SSS50TimeFrame', tooltip = 'TimeFrame you want the 50% line to be drawn based on', group = 'SSS50%Rule')
+// fitypercentOnorOFF = input.bool(defval = true, title = '50%Line On/Off')
+
+// var fitypercentlineColor2 = input.color(defval = color.new(purple, 50), title = text_fitypercent, group = 'SSS50%Rule')
+// fiftypercentTF2 = input.timeframe('W', 'SSS50TimeFrame', tooltip = 'TimeFrame you want the 2nd 50% line to be drawn based on', group = 'SSS50%Rule')
+// fitypercentOnorOFF2 = input.bool(defval = true, title = '50%Line On/Off')
+
+
+
+
+//***End of Inputs
+
+//***Start of local functions definiton***
+
+draw_line(_x1, _y1, _x2, _y2, _xloc, _extend, _color, _style, _width) =>
+    dline = line.new(x1 = _x1, y1 = _y1, x2 = _x2, y2 = _y2, xloc = _xloc, extend = _extend, color = _color, style = _style, width = _width)
+    line.delete(dline[1])
+
+
+draw_label(_x, _y, _text, _xloc, _yloc, _color, _style, _textcolor, _size, _textalign, _tooltip) =>
+    dlabel = label.new(x = _x, y = _y, text = _text, xloc = _xloc, yloc = _yloc, color = _color, style = _style, textcolor = _textcolor, size = _size, textalign = _textalign, tooltip = _tooltip)
+    label.delete(dlabel[1])
+
+//If security is futures - replace the ticker with continuous contract
+tickerid_func() =>
+    tickerid = syminfo.tickerid
+    if syminfo.type == 'futures'
+        tickerid := syminfo.root + '1!'
+        tickerid
+
+//Function to calculate ADR levels
+//Parameters:
+//  * lengthInput - ADR period
+//  * hi_low - true-->High, else-->Low 
+adr_func(lengthInput, hi_low) =>
+    float result = 0
+    float adr = 0
+    open_ = request.security(tickerid_func(), 'D', open, barmerge.gaps_off, barmerge.lookahead_on)
+    adr_High = request.security(tickerid_func(), 'D', ta.sma(high[1], lengthInput), barmerge.gaps_off, barmerge.lookahead_on)
+    adr_Low = request.security(tickerid_func(), 'D', ta.sma(low[1], lengthInput), barmerge.gaps_off, barmerge.lookahead_on)
+    adr := adr_High - adr_Low
+
+    if hi_low //High
+        result := adr / 2 + open_
+        result
+    else //Low
+        result := open_ - adr / 2
+        result
+
+////////50 percent calculation
+
+// highofTFinput = request.security(syminfo.tickerid, fiftypercentTF, high[1], lookahead = barmerge.lookahead_on)
+
+// lowofTFinput = request.security(syminfo.tickerid, fiftypercentTF, low[1], lookahead = barmerge.lookahead_on)
+
+// fiftypercentLevel = (lowofTFinput - highofTFinput) * 0.5 + highofTFinput
+
+// highofTFinput2 = request.security(syminfo.tickerid, fiftypercentTF2, high[1], lookahead = barmerge.lookahead_on)
+
+// lowofTFinput2 = request.security(syminfo.tickerid, fiftypercentTF2, low[1], lookahead = barmerge.lookahead_on)
+
+// fiftypercentLevel2 = (lowofTFinput2 - highofTFinput2) * 0.5 + highofTFinput2
+
+//Workaround to disable color management on the standard tab Style for plots
+//Custom inputs for colors should be used instead
+// transp_func() =>     COMMENTED OUT TO ACCOMODATE VWAP LABELING ABOVE. transp_func() comes from theStratuchiha
+//     transp_0 = 0
+//     transp_0
+
+//***End of local functions definiton***
+
+//***Start of getting data  
+start_time = request.security(tickerid_func(), 'D', time_close[1], barmerge.gaps_off, barmerge.lookahead_on)
+open__ = request.security(tickerid_func(), 'D', open, barmerge.gaps_off, barmerge.lookahead_on)
+openWK__ = request.security(tickerid_func(), 'W', open, barmerge.gaps_off, barmerge.lookahead_on)
+
+//start_time1 = request.security(tickerid_func(), "W", time_close[1],barmerge.gaps_off,barmerge.lookahead_on)
+start_day_open = request.security(syminfo.tickerid, 'D', open, lookahead = barmerge.lookahead_on)
+start_time1 = request.security(syminfo.tickerid, 'W', open, lookahead = barmerge.lookahead_on)
+
+//wk_time = request.security(syminfo.tickerid, "W", time[1], lookahead = barmerge.lookahead_on)
+// perc50_1_time = request.security(syminfo.tickerid, fiftypercentTF, time[1], lookahead = barmerge.lookahead_on)
+// perc50_2_time = request.security(syminfo.tickerid, fiftypercentTF2, time[1], lookahead = barmerge.lookahead_on)
+
+
+adr1_high = adr_func(adr_1, true)
+adr1_low = adr_func(adr_1, false)
+adr2_high = adr_func(adr_2, true)
+adr2_low = adr_func(adr_2, false)
+
+
+//***End of getting data
+
+float _adr1_high = na
+float _adr1_low = na
+float _adr2_high = na
+float _adr2_low = na
+
+float _open = na
+
+
+
+//*********************
+//***Start of plotting*
+
+//Decide if we can show the chart:
+//Daily levels should be visible on intraday chart only
+
+//Decide if we can show the chart:
+//Daily levels should be visible on intraday chart only
+
+var show_chart = false
+
+if timeframe.isintraday
+    show_chart := true
+    show_chart
+
+
+
+
+////Plot today only
+
+f_returnTFminutes(_tfs) =>
+    int tfMin = switch _tfs
+        '240' => 240
+        '130' => 130
+        '90' => 90
+        '60' => 60
+        '65' => 65
+        '10' => 10
+        '9' => 9
+        '18' => 18
+        '36' => 36
+        '6' => 6
+        '5' => 5
+        '4' => 4
+        '3' => 3
+        '2' => 2
+        '1' => 1
+        '45' => 45
+        '30' => 30
+        '26' => 26
+        '15' => 15
+        '13' => 13
+        '1D' => 1440
+        'D' => 1440
+        '1W' => 10080
+        'W' => 10080
+        '1M' => 43830
+        'M' => 43830
+        '3M' => 43830
+        '12M' => 43830
+        => 1
+    currentTFmins = timeframe.period == '65' ? 65 : timeframe.period == '60' ? 60 : timeframe.period == '90' ? 90 : timeframe.period == '240' ? 240 : timeframe.period == '130' ? 130 : timeframe.period == '26' ? 26 : timeframe.period == '65' ? 65 : timeframe.period == '18' ? 18 : timeframe.period == '5' ? 5 : timeframe.period == '36' ? 36 : timeframe.period == '9' ? 9 : timeframe.period == '4' ? 4 : timeframe.period == '3' ? 3 : timeframe.period == '2' ? 2 : timeframe.period == '1' ? 1 : timeframe.period == '45' ? 45 : timeframe.period == '30' ? 30 : timeframe.period == '16' ? 16 : timeframe.period == '13' ? 13 : timeframe.period == '15' ? 15 : timeframe.isdaily ? 1440 : timeframe.isweekly ? 10080 : timeframe.ismonthly ? 43830 : na
+    isTFBelowOrEqual = tfMin >= currentTFmins
+    isTFBelowOrEqual
+
+
+currTF = timeframe.period
+float posX = time + 24 * 60 * 60 * 1000
+
+if currTF == '60' or currTF == '90'
+    posX := time + 24 * 60 * 60 * 2000
+    posX
+if currTF == '240'
+    posX := time + 24 * 60 * 60 * 10000
+    posX
+if currTF == '720' or currTF == 'D'
+    posX := time + 24 * 60 * 60 * 20000
+    posX
+if currTF == 'W'
+    posX := time + 24 * 60 * 60 * 100000
+    posX
+if currTF == 'M'
+    posX := time + 24 * 60 * 60 * 400000
+    posX
+
+
+
+// var perc50_1 = line.new(na, na, na, na)
+// if fitypercentOnorOFF and f_returnTFminutes(fiftypercentTF)
+//     perc50_1 := line.new(perc50_1_time, fiftypercentLevel, time, fiftypercentLevel, xloc = xloc.bar_time, extend = extend.right, color = fitypercentlineColor, width = 1)
+//     line.delete(perc50_1[1])
+// if labels_enabled == true and f_returnTFminutes(fiftypercentTF)
+//     perc50_1_lbl = label.new(math.round(posX), fiftypercentLevel, fiftypercentTF + ':50% (' + str.tostring(math.round(fiftypercentLevel, 2)) + ')', color = fitypercentlineColor, textcolor = fitypercentlineColor, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+//     label.delete(perc50_1_lbl[1])
+    //draw_line(start_time1, fiftypercentLevel, time, fiftypercentLevel, xloc.bar_time, extend.right, fitypercentlineColor, line.style_solid, 2)  
+
+// var perc50_2 = line.new(na, na, na, na)
+// if fitypercentOnorOFF2 and f_returnTFminutes(fiftypercentTF2)
+//     perc50_2 := line.new(perc50_2_time, fiftypercentLevel2, time, fiftypercentLevel2, xloc = xloc.bar_time, extend = extend.right, color = fitypercentlineColor2, width = 1)
+//     line.delete(perc50_2[1])
+// if labels_enabled == true and f_returnTFminutes(fiftypercentTF2)
+//     perc50_2_lbl = label.new(math.round(posX), fiftypercentLevel2, fiftypercentTF2 + ':50% (' + str.tostring(math.round(fiftypercentLevel2, 2)) + ')', color = fitypercentlineColor2, textcolor = fitypercentlineColor2, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+//     label.delete(perc50_2_lbl[1])
+
+//     draw_line(start_time1, fiftypercentLevel2, time, fiftypercentLevel2, xloc.bar_time, extend.right, fitypercentlineColor2, line.style_solid, 2)  
+
+
+//////////////Weekly Open Line Code///////////////////////////////////////////
+// var wo_l = line.new(na, na, na, na)
+// if openofWK and f_returnTFminutes('W')
+//     // wo_l := line.new(bar_index, wk_time, bar_index, time, xloc = xloc.bar_time, extend=extend.right, color=color_openwk, width=1)
+//     // line.delete(wo_l[1])
+//     var line1 = line.new(na, na, na, na, style = line.style_solid, color = color_openwk, extend = extend.right)
+//     if bool(ta.change(weekofyear))
+//         line.set_xy1(line1, bar_index, open)
+//         line.set_xy2(line1, bar_index + 1, open)
+// if labels_enabled == true and f_returnTFminutes('W')
+//     wo_lbl = label.new(math.round(posX), start_time1, 'Open WK (' + str.tostring(math.round(start_time1, 2)) + ')', color = color_openwk, textcolor = color_openwk, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+//     label.delete(wo_lbl[1])
+    //     draw_line(start_time1, openWK__, time, openWK__, xloc.bar_time, extend.right, color_openwk, line.style_solid, 1) 
+    ///////////////////////////////////////////////////
+
+///////////Daily Open
+
+
+    // day_line = line.new(x1 = bar_index - 1, y1 = start_day_open, x2 = bar_index, y2 = start_day_open, xloc = xloc.bar_index, style = line.style_solid, extend = extend.right, color = color_open)
+    // line.delete(day_line[1]) // remove the previous line when new bar appears
+    // if ta.change(dayofweek)
+    //     line.set_xy1(day_line, bar_index, open)
+    //     line.set_xy2(day_line, bar_index + 1, open)
+    //draw_line(start_time, open__, time, open__, xloc.bar_time, extend.none, color_open, line.style_solid, 2)  
+    // if labels_enabled == true and f_returnTFminutes('D')
+    //     d_lbl = label.new(math.round(posX), bar_index, 'Open (' + str.tostring(math.round(open__, 2)) + ')', color = color_openwk, textcolor = color_openwk, textalign = text.align_center, style = label.style_none, size = size.normal, xloc = xloc.bar_time)
+    //     label.delete(d_lbl[1])
+
+
+
+//////////////////////////////
+
+
+if show_chart
+    draw_line1 = line.new(start_time, adr1_high, time, adr1_high, xloc.bar_time, extend.none, color_ADR1_high, line.style_solid, 1)
+    line.delete(draw_line1[1])
+
+    draw_line2 = line.new(start_time, adr2_high, time, adr2_high, xloc.bar_time, extend.none, color_ADR2_high, line.style_solid, 1)
+    line.delete(draw_line2[1])
+
+    draw_line3 = line.new(start_time, adr1_low, time, adr1_low, xloc.bar_time, extend.none, color_ADR1_low, line.style_solid, 1)
+    line.delete(draw_line3[1])
+
+    draw_line4 = line.new(start_time, adr2_low, time, adr2_low, xloc.bar_time, extend.none, color_ADR2_low, line.style_solid, 1)
+    line.delete(draw_line4[1])
+
+    linefill.new(draw_line1, draw_line2, color.new(adrUppercolorfill, 80))
+
+    linefill.new(draw_line3, draw_line4, color.new(adrlowercolorfill, 80))
+
+//***End of plotting***
+//*********************
+
+//*********************
+
+//*********ALERTS**************
+
+[currPrice, currHigh, currLow] = request.security(syminfo.tickerid, timeframe.period, [close, high, low], lookahead = barmerge.lookahead_on)
+
+
+// fiftypercentlevelCrossup = ta.crossover(currPrice, fiftypercentLevel)
+
+// fiftypercentlevelCrossup2 = ta.crossover(currPrice, fiftypercentLevel2)
+
+// if fiftypercentlevelCrossup
+//     alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over 50% of prev candle detected!', alert.freq_once_per_bar)
+
+// if fiftypercentlevelCrossup2
+//     alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over 50% of prev candle detected!', alert.freq_once_per_bar)
+
+// fiftypercentlevelCrossDown = ta.crossunder(currPrice, fiftypercentLevel)
+
+// fiftypercentlevelCrossDown2 = ta.crossunder(currPrice, fiftypercentLevel2)
+
+// if fiftypercentlevelCrossDown
+//     alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under 50% of prev candle detected!', alert.freq_once_per_bar)
+
+
+// if fiftypercentlevelCrossDown2
+//     alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under 50% of prev candle detected!', alert.freq_once_per_bar)
+
+adrhigh1cross = ta.crossover(currPrice, adr1_high)
+
+adrhigh2cross = ta.crossover(currPrice, adr2_high)
+
+if adrhigh1cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over upper adr 1 detected!', alert.freq_once_per_bar)
+if adrhigh2cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross over upper adr 2 detected!', alert.freq_once_per_bar)
+
+adrlow1cross = ta.crossunder(currPrice, adr1_low)
+
+adrlow2cross = ta.crossunder(currPrice, adr2_low)
+
+if adrlow1cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under lower adr 1 detected!', alert.freq_once_per_bar)
+if adrlow2cross
+    alert(syminfo.ticker + '[' + timeframe.period + '] : Cross under lower adr 2 detected!', alert.freq_once_per_bar)
+
+//***Start of Labels***
+
+label_ADR1_high = ''
+label_ADR2_high = ''
+
+label_ADR1_low = ''
+label_ADR2_low = ''
+
+// label_open = ''
+// label_openWK = ''
+
+// label_fitypercentline = ''
+// label_fitypercentline2 = ''
+
+if labels_enabled == true
+    label_ADR1_high := str.tostring(math.round_to_mintick(adr1_high))
+    label_ADR2_high := str.tostring(math.round_to_mintick(adr2_high))
+
+    label_ADR1_low := str.tostring(math.round_to_mintick(adr1_low))
+    label_ADR2_low := str.tostring(math.round_to_mintick(adr2_low))
+
+    // label_open := str.tostring(math.round_to_mintick(open__))
+    // label_open
+    //label_fitypercentline :=  str.tostring(math.round_to_mintick(fiftypercentLevel))
+    //label_fitypercentline2 :=  str.tostring(math.round_to_mintick(fiftypercentLevel2))
+    //label_openWK      := str.tostring(math.round_to_mintick(openWK__))
+
+string_ADR1_high = ' (' + label_ADR1_high + ')'
+string_ADR2_high = ' (' + label_ADR2_high + ')'
+
+string_ADR1_low = ' (' + label_ADR1_low + ')'
+string_ADR2_low = ' (' + label_ADR2_low + ')'
+
+// string_open_low = ' (' + label_open + ')'
+// string_open_wk = ' (' + label_openWK + ')'
+
+// string_fiftypercent = ' (' + label_fitypercentline + ')'
+// string_fiftypercent2 = ' (' + label_fitypercentline2 + ')'
+
+//Labels
+if show_chart and labels_enabled == true
+    draw_label(bar_index + 1, adr1_high, text_ADR1_high + string_ADR1_high, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR1_high, transp_func()), size.normal, text.align_left, '')
+    draw_label(bar_index + 1, adr2_high, text_ADR2_high + string_ADR2_high, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR2_high, transp_func()), size.normal, text.align_left, '')
+
+    draw_label(bar_index + 1, adr1_low, text_ADR1_low + string_ADR1_low, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR1_low, transp_func()), size.normal, text.align_left, '')
+    draw_label(bar_index + 1, adr2_low, text_ADR2_low + string_ADR2_low, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_ADR2_low, transp_func()), size.normal, text.align_left, '')
+
+// draw_label(bar_index + 1, open__, text_open + string_open_low, xloc.bar_index, yloc.price, color.new(color.white, 100), label.style_label_left, color.new(color_open, transp_func()), size.normal, text.align_left, '')
+
+
+
