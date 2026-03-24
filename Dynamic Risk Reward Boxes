@@ -1,0 +1,161 @@
+indicator("Dynamic R:R Strategy - BTC 15m Optimized", overlay = true, max_labels_count = 10, max_lines_count = 10, max_boxes_count = 10)
+
+// --- Constants ---
+const string G1 = "Strategy Logic (BTC 15m)"
+const string G2 = "Trade Setup"
+const string G3 = "Stop Loss Settings"
+const string G4 = "Take Profit Ratios"
+const string G5 = "Position Sizing"
+const string G6 = "Visuals"
+
+// --- Inputs ---
+// Signal Inputs (Optimized for 15m BTC Trend Following)
+useSignals     = input.bool(true, "Enable Strategy Signals", group = G1)
+emaFastLen     = input.int(20, "Fast EMA (Signal)", minval = 1, group = G1)
+emaSlowLen     = input.int(50, "Slow EMA (Signal)", minval = 1, group = G1)
+trendLen       = input.int(200, "Trend Filter EMA", minval = 1, group = G1)
+rsiLen         = input.int(14, "RSI Filter Length", minval = 1, group = G1)
+rsiOverbought  = input.int(60, "RSI Bullish Threshold", minval = 50, group = G1)
+rsiOversold    = input.int(40, "RSI Bearish Threshold", maxval = 50, group = G1)
+
+// Planner Inputs
+autoSnap       = input.bool(true, "Auto-Snap Planner to Latest Signal", group = G2)
+tradeTypeInput = input.string("Long", "Manual Direction", options = ["Long", "Short"], group = G2)
+entrySource    = input.string("Last Price", "Entry Price", options = ["Last Price", "Manual"], group = G2)
+manualEntry    = input.float(0.0, "Manual Entry Price", minval = 0.0, group = G2)
+
+slMethod       = input.string("ATR", "SL Calculation", options = ["ATR", "Swing High/Low"], group = G3)
+atrLength      = input.int(14, "ATR Length", minval = 1, group = G3)
+atrMult        = input.float(1.5, "ATR Multiplier (Tight for BTC)", minval = 0.1, step = 0.1, group = G3)
+swingLookback  = input.int(5, "Swing Lookback (15m)", minval = 2, group = G3)
+
+tp1Ratio       = input.float(1.0, "TP 1 Ratio (R:R)", minval = 0.1, group = G4)
+tp2Ratio       = input.float(2.0, "TP 2 Ratio (R:R)", minval = 0.1, group = G4)
+tp3Ratio       = input.float(3.0, "TP 3 Ratio (R:R)", minval = 0.1, group = G4)
+
+accountSize    = input.float(10000.0, "Account Balance", minval = 1.0, group = G5)
+riskPct        = input.float(1.0, "Risk Percentage (%)", minval = 0.01, group = G5)
+contractSize   = input.float(1.0, "Contract Size / Multiplier", minval = 1.0, group = G5)
+
+longColor      = input.color(color.new(#089981, 0), "Long Color", group = G6)
+shortColor     = input.color(color.new(#f23645, 0), "Short Color", group = G6)
+slColor        = input.color(color.new(#787b86, 0), "SL Color", group = G6)
+transp         = input.int(85, "Fill Transparency", group = G6)
+textColor      = chart.fg_color
+
+// --- Strategy Signal Logic (Trend + Momentum Filter) ---
+float emaFast   = ta.ema(close, emaFastLen)
+float emaSlow   = ta.ema(close, emaSlowLen)
+float emaTrend  = ta.ema(close, trendLen)
+float rsi       = ta.rsi(close, rsiLen)
+
+// Entry Conditions: 1. EMA Cross | 2. Above/Below Trend EMA | 3. RSI Momentum
+bool longSignal  = ta.crossover(emaFast, emaSlow) and close > emaTrend and rsi > rsiOverbought
+bool shortSignal = ta.crossunder(emaFast, emaSlow) and close < emaTrend and rsi < rsiOversold
+
+plotshape(useSignals and longSignal, "Buy Signal", shape.triangleup, location.belowbar, color.new(longColor, 0), size = size.small)
+plotshape(useSignals and shortSignal, "Sell Signal", shape.triangledown, location.abovebar, color.new(shortColor, 0), size = size.small)
+
+// --- Planner Persistence ---
+var string activeTradeType = tradeTypeInput
+var float  activeEntry     = 0.0
+var float  activeATR       = 0.0
+var float  activeSwingSL   = 0.0
+
+// Capture Signal Data
+if useSignals and (longSignal or shortSignal)
+    activeTradeType := longSignal ? "Long" : "Short"
+    activeEntry     := close
+    activeATR       := ta.atr(atrLength)
+    activeSwingSL   := longSignal ? ta.lowest(low, swingLookback) : ta.highest(high, swingLookback)
+
+// --- Visualization Objects ---
+var line entryLine  = line.new(na, na, na, na, color = textColor, style = line.style_dashed)
+var line slLine     = line.new(na, na, na, na, color = slColor, width = 2)
+var line tp3Line    = line.new(na, na, na, na)
+var box riskBox     = box.new(na, na, na, na, border_color = #00000000)
+var box rewardBox   = box.new(na, na, na, na, border_color = #00000000)
+var label entryLabel = label.new(na, na, "", color = #00000000, textcolor = textColor, style = label.style_label_left, size = size.small)
+var label slLabel    = label.new(na, na, "", color = #00000000, textcolor = slColor, style = label.style_label_left, size = size.small)
+var label tp1Label   = label.new(na, na, "", color = #00000000, style = label.style_label_left, size = size.small)
+var label tp2Label   = label.new(na, na, "", color = #00000000, style = label.style_label_left, size = size.small)
+var label tp3Label   = label.new(na, na, "", color = #00000000, style = label.style_label_left, size = size.small)
+var table dash       = table.new(position.top_right, 2, 4, bgcolor = chart.bg_color, border_color = slColor, border_width = 1, frame_color = slColor, frame_width = 1)
+
+if barstate.islast
+    // Final Decision Logic
+    string finalType = autoSnap and activeEntry > 0 ? activeTradeType : tradeTypeInput
+    float  finalEntry = autoSnap and activeEntry > 0 ? activeEntry : (entrySource == "Last Price" ? close : manualEntry)
+    float  finalATR   = autoSnap and activeEntry > 0 ? activeATR : ta.atr(atrLength)
+    
+    float finalSL = na
+    if slMethod == "ATR"
+        finalSL := finalType == "Long" ? finalEntry - (finalATR * atrMult) : finalEntry + (finalATR * atrMult)
+    else
+        finalSL := autoSnap and activeEntry > 0 ? activeSwingSL : (finalType == "Long" ? ta.lowest(low, swingLookback) : ta.highest(high, swingLookback))
+
+    // Calculations
+    float riskDist = math.abs(finalEntry - finalSL)
+    float tp1 = finalType == "Long" ? finalEntry + (riskDist * tp1Ratio) : finalEntry - (riskDist * tp1Ratio)
+    float tp2 = finalType == "Long" ? finalEntry + (riskDist * tp2Ratio) : finalEntry - (riskDist * tp2Ratio)
+    float tp3 = finalType == "Long" ? finalEntry + (riskDist * tp3Ratio) : finalEntry - (riskDist * tp3Ratio)
+
+    float riskAmount = accountSize * (riskPct / 100)
+    float posSize    = riskDist > 0 ? (riskAmount / (riskDist * contractSize)) : 0
+    
+    color dirColor  = finalType == "Long" ? longColor : shortColor
+    color riskColor = color.new(slColor, transp)
+    color gainColor = color.new(dirColor, transp)
+    
+    int extendBars = 20
+    int startBar   = bar_index
+    int endBar     = bar_index + extendBars
+
+    // Update Elements
+    entryLine.set_xy1(startBar, finalEntry)
+    entryLine.set_xy2(endBar, finalEntry)
+    entryLabel.set_xy(endBar, finalEntry)
+    entryLabel.set_text("Entry: " + str.tostring(finalEntry, format.mintick))
+
+    slLine.set_xy1(startBar, finalSL)
+    slLine.set_xy2(endBar, finalSL)
+    slLabel.set_xy(endBar, finalSL)
+    slLabel.set_text("SL: " + str.tostring(finalSL, format.mintick))
+
+    tp1Label.set_xy(endBar, tp1)
+    tp1Label.set_text("TP 1 (" + str.tostring(tp1Ratio) + "R): " + str.tostring(tp1, format.mintick))
+    tp1Label.set_textcolor(dirColor)
+    tp2Label.set_xy(endBar, tp2)
+    tp2Label.set_text("TP 2 (" + str.tostring(tp2Ratio) + "R): " + str.tostring(tp2, format.mintick))
+    tp2Label.set_textcolor(dirColor)
+    tp3Label.set_xy(endBar, tp3)
+    tp3Label.set_text("TP 3 (" + str.tostring(tp3Ratio) + "R): " + str.tostring(tp3, format.mintick))
+    tp3Label.set_textcolor(dirColor)
+    
+    tp3Line.set_xy1(startBar, tp3)
+    tp3Line.set_xy2(endBar, tp3)
+    tp3Line.set_color(dirColor)
+
+    riskBox.set_lefttop(startBar, finalType == "Long" ? finalEntry : finalSL)
+    riskBox.set_rightbottom(endBar, finalType == "Long" ? finalSL : finalEntry)
+    riskBox.set_bgcolor(riskColor)
+    rewardBox.set_lefttop(startBar, finalType == "Long" ? tp3 : finalEntry)
+    rewardBox.set_rightbottom(endBar, finalType == "Long" ? finalEntry : tp3)
+    rewardBox.set_bgcolor(gainColor)
+
+    // Table
+    table.cell(dash, 0, 0, "Signal Planner", text_color = textColor)
+    table.merge_cells(dash, 0, 0, 1, 0)
+    table.cell(dash, 0, 1, "Risk (" + str.tostring(riskPct) + "%)", text_color = slColor, text_halign = text.align_left)
+    table.cell(dash, 1, 1, str.tostring(riskAmount, "#.##"), text_color = textColor, text_halign = text.align_right)
+    table.cell(dash, 0, 2, "Qty", text_color = dirColor, text_halign = text.align_left)
+    table.cell(dash, 1, 2, str.tostring(posSize, "#.####"), text_color = dirColor, text_halign = text.align_right)
+    table.cell(dash, 0, 3, "Reward (3R)", text_color = dirColor, text_halign = text.align_left)
+    table.cell(dash, 1, 3, str.tostring(riskAmount * tp3Ratio, "#.##"), text_color = dirColor, text_halign = text.align_right)
+
+// --- Alerts ---
+if longSignal
+    alert("BTC Buy Signal Detected! Price: " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
+
+if shortSignal
+    alert("BTC Sell Signal Detected! Price: " + str.tostring(close, format.mintick), alert.freq_once_per_bar_close)
