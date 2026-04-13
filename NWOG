@@ -1,0 +1,1172 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © MadMonkTrading
+
+//@version=6
+
+indicator(title='NWOG', shorttitle='NWOG', overlay=true, max_lines_count = 500, max_boxes_count = 200, max_labels_count = 500)
+
+var string G_GENERAL = "General Settings"
+max_tf = input.string("15", "Max Timeframe (minutes)", options = ["1", "3", "5", "15", "30", "60", "120", "240", "D"], group = G_GENERAL)
+
+get_tf_minutes(string tf) =>
+    switch tf
+        "1" => 1
+        "3" => 3
+        "5" => 5
+        "15" => 15
+        "30" => 30
+        "60" => 60
+        "120" => 120
+        "240" => 240
+        "D" => 1440
+        => 0
+
+current_tf_min = timeframe.in_seconds() / 60
+max_tf_min = get_tf_minutes(max_tf)
+show_indicator = current_tf_min <= max_tf_min
+
+day = math.round(6.5*1000*3600)
+longDay = 24*1000*3600
+isSPY = str.tostring(syminfo.ticker) =="SPY"? true:false
+_17_00 = timestamp('America/New_York', year, month, dayofmonth, 17, 00, 00)
+_18_00 = timestamp('America/New_York', year, month, dayofmonth, 18, 00, 00)
+colorNone = color.new(color.white, 100)
+showBox = input.bool(true, "Standard NWOG (Friday 5pm close - Sunday 6pm open)| ", inline = '-3' , group = 'boxes & midlines', tooltip = "Shows the New Week Open Gap from Friday 5pm close to Sunday 6pm open (New York Time)")
+boxColor = input.color(color.new(color.red, 99), "Box", inline ='-3', group = 'boxes & midlines')
+
+showRthGapLines = input.bool(true, "show gap lines", inline ='-2.5', group = 'boxes & midlines')
+rthGapCol = input.color(color.new(color.black, 10), "", inline ='-2.5', group = 'boxes & midlines')
+rthGapStyle = input.string(line.style_solid, "| style:", options = [line.style_solid, line.style_dotted, line.style_dashed, line.style_arrow_left, line.style_arrow_right, line.style_arrow_both], inline ='-2.5', group = 'boxes & midlines' )
+rthGapWidth = input.int(2, "| width", minval=1, maxval=4, inline ='-2.5', group = 'boxes & midlines')
+
+showRthMidline = input.bool(true, "show midline", inline ='-2', group = 'boxes & midlines')
+rthMidCol = input.color(color.red, "", inline ='-2', group = 'boxes & midlines')
+rthMidStyle = input.string(line.style_dashed, "| style:", options = [line.style_solid, line.style_dotted, line.style_dashed, line.style_arrow_left, line.style_arrow_right, line.style_arrow_both], inline ='-2', group = 'boxes & midlines' )
+
+showRthQuartLines = input.bool(true, "show quartile lines", inline ='-1.5', group = 'boxes & midlines')
+rthQuartCol = input.color(color.new(color.red, 50), "", inline ='-1.5', group = 'boxes & midlines')
+rthQuartStyle = input.string(line.style_solid, "| style:", options = [line.style_solid, line.style_dotted, line.style_dashed, line.style_arrow_left, line.style_arrow_right, line.style_arrow_both], inline ='-1.5', group = 'boxes & midlines' )
+rthQuartWidth = input.int(1, "| width", minval=1, maxval=4, inline ='-1.5', group = 'boxes & midlines')
+
+showRthEighthLines = input.bool(true, "show 1/8th lines", inline ='-1.4', group = 'boxes & midlines')
+rthEighthCol = input.color(color.new(color.red, 70), "", inline ='-1.4', group = 'boxes & midlines')
+rthEighthStyle = input.string(line.style_dotted, "| style:", options = [line.style_solid, line.style_dotted, line.style_dashed, line.style_arrow_left, line.style_arrow_right, line.style_arrow_both], inline ='-1.4', group = 'boxes & midlines' )
+rthEighthWidth = input.int(1, "| width", minval=1, maxval=4, inline ='-1.4', group = 'boxes & midlines')
+
+showHiLoBox = input.bool (false, "High-low Gap (Friday 5pm - Sunday 6pm) |", inline ='-1', group = 'boxes & midlines', tooltip = "Shows the gap (as box) between high/low of final Friday candle (ending at 5pm) to the high/low of first Sunday NWOG candle (starting at 6pm)\n\n(New York Time)")
+boxColor2 = input.color(color.new(color.gray, 90), "Box", inline ='-1', group = 'boxes & midlines')
+borderColor2=input.color(color.new(color.black, 90), "Border", inline ='-1', group = 'boxes & midlines')
+showHiLoMidline = input.bool(false, "show midline", inline ='0', group = 'boxes & midlines')
+HiLoMidCol = input.color(color.gray, "", inline ='0', group = 'boxes & midlines')
+HiLoMidStyle = input.string(line.style_dashed, "| style:", options = [line.style_solid, line.style_dotted, line.style_dashed, line.style_arrow_left, line.style_arrow_right, line.style_arrow_both], inline ='0', group = 'boxes & midlines' )
+
+boxesToShow =input.int(4, "historical Boxes & Midlines to show", inline = '1', group = 'boxes & midlines')
+showTxt =input.bool(false, "Box text", inline='2', group = 'boxes & midlines')
+boxTxtCol = input.color(color.new(color.gray, 30), "", inline ='2', group = 'boxes & midlines')
+txtValignChoice = input.string(text.align_center, "Position:", options = [text.align_top, text.align_center, text.align_bottom], inline ='2', group = 'boxes & midlines')
+txtHalignChoice = input.string(text.align_right, "", options = [text.align_center, text.align_left, text.align_right], inline ='2', group = 'boxes & midlines')
+extendBoxRight = input.bool (true, "extend boxes & midlines right", inline ='3', group = 'boxes & midlines', tooltip = "recommend only using this setting with historical boxes to show = 1")
+bufferBars = input.int(5, "| buffer bars", minval=0, inline ='3', group = 'boxes & midlines')
+
+openOffset = input.int(0, "+/- offset (minutes) from Sunday 6pm NY time", step = 5, group = 'time adjustment (for non-USA based Indices)', tooltip = "Added to support non-USA based indices.")
+closeOffset = input.int(0, "+/- offset (minutes) from Friday 5pm NY time", step = 5, group = 'time adjustment (for non-USA based Indices)')
+
+linesToShow=input.int(1, "historical 5pm close Lines & labels to show", group = '5pm close lines & labels')
+showRTHcloseLine =input.bool(true, "show prev Friday 5pm close line", inline ='2', group = '5pm close lines & labels')
+
+RTHcloseColor = input.color(color.new(color.red, 10), "", inline ='2', group = '5pm close lines & labels')
+extendLineRight = input.bool (true, "extend lines right", inline ='3', group = '5pm close lines & labels')
+linestyleRTH = input.string(line.style_dotted, "| style:", options = [line.style_solid, line.style_dotted, line.style_dashed, line.style_arrow_left, line.style_arrow_right, line.style_arrow_both], inline ='3', group = '5pm close lines & labels')
+RTH_line_width = input.int(1, "| width", options = [1,2,3,4], inline ='3', group = '5pm close lines & labels')
+_minute = 1000*60
+
+rthClose = ta.valuewhen(dayofweek == 6 and time_close == _17_00 + closeOffset*_minute, close, 0)
+
+var string G_DAY_FEATURES = "Day Specific Features"
+useDayColors = input.bool(true, "Use Day-Specific Colors for Lines and Boxes", group=G_DAY_FEATURES)
+monColor = input.color(color.blue, "Monday Color", group=G_DAY_FEATURES)
+tueColor = input.color(color.orange, "Tuesday Color", group=G_DAY_FEATURES)
+wedColor = input.color(color.red, "Wednesday Color", group=G_DAY_FEATURES)
+thuColor = input.color(color.green, "Thursday Color", group=G_DAY_FEATURES)
+friColor = input.color(color.purple, "Friday Color", group=G_DAY_FEATURES)
+showSpecialORGs = input.bool(false, "Show Last Two Mondays and Fridays NWOGs", group=G_DAY_FEATURES, tooltip="This will plot the NWOG gap lines (plus midlines, quartiles & 1/8ths) for the last two Mondays and last two Fridays in addition to the regular historical.")
+
+var string G_LABELS   = "Label Settings"
+showLabels  = input.bool(true,  "Show Labels", group=G_LABELS)
+showDayInLabel = input.bool(true, "Show Abbreviated Day in Labels", group=G_LABELS)
+useDayColorsForLabels = input.bool(true, "Use Day-Specific Colors for Labels", group=G_LABELS)
+showMidlineLabels = input.bool(true, "Show Midline Labels", group=G_LABELS)
+showQuartileLabels = input.bool(false, "Show Quartile Labels", group=G_LABELS)
+showEighthLabels = input.bool(false, "Show 1/8th Labels", group=G_LABELS)
+labelColor  = input.color(color.black, "Label Color", group=G_LABELS)
+labelSizeIn = input.string("Tiny", "Label Size", options=["Tiny", "Small", "Normal", "Large"], group=G_LABELS)
+
+var string G_PD = "Premium/Discount"
+showPDTable = input.bool(true, "Show Premium/Discount Table", group=G_PD)
+useHistoricalCount = input.bool(false, "Use Historical Boxes Count for PD Gaps", group=G_PD)
+pdGaps = input.int(4, "Number of Gaps for PD (if not using historical)", minval=1, group=G_PD)
+pdDisplayMode = input.string("Both", "PD Display Mode", options = ["Status", "Percentage", "Both"], group=G_PD)
+showPDGradients = input.bool(false, "Show PD Gradient Levels (High/Low/Mid/Quartiles/1/8ths)", group=G_PD)
+pdEighthCol = input.color(color.new(color.black, 10), "", group = G_PD)
+pdEighthStyle = input.string(line.style_solid, "| style:", options = [line.style_solid, line.style_dotted, line.style_dashed, line.style_arrow_left, line.style_arrow_right, line.style_arrow_both], group = G_PD)
+pdEighthWidth = input.int(1, "| width", minval=1, maxval=4, group = G_PD)
+showPDEighthLabels = input.bool(true, "Show PD Labels", group=G_PD)
+onlyShowPD = input.bool(false, "Only Show PD Gradients & Table", group=G_PD)
+pdTableSize = input.string("Small", "PD Table Size", options = ["Tiny", "Small", "Normal", "Large"], group=G_PD)
+pdTablePosition = input.string("Bottom Right", "PD Table Position", options = ["Bottom Right", "Top Right", "Bottom Left", "Bottom Center", "Top Left", "Top Center"], group=G_PD)
+
+var string G_FVG = "FVG Settings"
+show_FVG = input.bool(true , title = 'Show FVGs Overlapping NWOG Gradients' , inline = '0' , group = G_FVG)
+minFvgSize = input.int(2 , title = 'Min FVG Size (Ticks)' , minval = 0 , inline = '0' , group = G_FVG)
+show_FVG_first = input.bool(true , title = 'First FVG Only' , inline = '0' , group = G_FVG)
+col_FVG_bull = input.color(color.new(#673ab7, 85) , title = '' , inline = '0' , group = G_FVG)
+col_FVG_bear = input.color(color.new(#673ab7, 85) , title = '' , inline = '0' , group = G_FVG)
+ext_bx_FVG = input.int(20 , title = 'FVG Box Right Extension (bars)', minval = 0 , maxval = 200 , inline = '1' , group = G_FVG)
+show_midline = input.bool(true , title = 'Mid Line' , inline = '1' , group = G_FVG)
+col_FVG_mid = input.color(color.new(color.black,0) , title = '' , inline = '1' , group = G_FVG)
+midline_style = input.string('Dotted', title = 'Mid Line Style', options = ['Solid', 'Dashed', 'Dotted'], inline = '1', group = G_FVG)
+
+// NEW TOGGLE (exactly as requested)
+onlyShowFVG = input.bool(false, "Only Show FVGs", group = G_FVG, tooltip = "When enabled: hides ALL NWOG boxes/lines/labels, Hi-Lo gaps, Friday 5pm close lines, AND the entire Premium/Discount table + gradients.\nOnly overlapping FVGs remain visible.")
+
+// NEW HELPER (declared AFTER both toggles to prevent undeclared identifier error)
+showOrgVisuals = not onlyShowPD and not onlyShowFVG
+
+getLabelSize(size) =>
+    size == "Tiny" ? size.tiny :
+         size == "Small" ? size.small :
+         size == "Large" ? size.large :
+         size.normal
+
+getTablePosition(pos) =>
+    pos == "Bottom Right" ? position.bottom_right : pos == "Top Right" ? position.top_right : pos == "Bottom Left" ? position.bottom_left : pos == "Bottom Center" ? position.bottom_center : pos == "Top Left" ? position.top_left : position.top_center
+
+formatDateFromTime(int t) =>
+    mon = month(t)
+    day = dayofmonth(t)
+    str.format("{0}/{1}", mon < 10 ? "0" + str.tostring(mon) : str.tostring(mon), day < 10 ? "0" + str.tostring(day) : str.tostring(day))
+
+useNoPlotSession = input.bool(false, "Use no plot session (when 'extend right' is toggled on)", group = "no plot session", inline='1', tooltip = "boxes/lines/labels will stop painting through these hours..\n\nBut will resume painting to the last bar index outside of these hours\n\n only applies when 'extend boxes and lines right' is toggled on")
+inputSession1 = input.session('1600-0830', title='stop painting boxes/lines during these hours', group = "no plot session", inline='2')
+inSession1 = not na(time(timeframe.period, str.tostring(inputSession1), "America/New_York")) 
+barTime = timeframe.in_seconds(timeframe.period)*1000
+buffer_ms = bufferBars * barTime
+extended_time = time + buffer_ms   
+
+var int t1 = 0
+
+var box bx = na
+var array<box> boxArr = array.new<box>(0)
+var line lnRthMid = na
+var array<line> lnRthMidArr = array.new<line>(0)
+rthMidVal = math.min(rthClose, open) + 0.5* math.abs(rthClose-open)
+gapLow = math.min(rthClose, open)
+gapSize = math.abs(rthClose - open)
+rth25Val = gapLow + 0.25 * gapSize
+rth75Val = gapLow + 0.75 * gapSize
+rth125Val = gapLow + 0.125 * gapSize
+rth375Val = gapLow + 0.375 * gapSize
+rth625Val = gapLow + 0.625 * gapSize
+rth875Val = gapLow + 0.875 * gapSize
+rthGapHigh = math.max(rthClose, open)
+rthGapLow = math.min(rthClose, open)
+
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showBox and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    color boxCol = useDayColors ? color.new(dayColor, 99) : boxColor
+    bx:=box.new(time, rthClose, extendBoxRight?extended_time: time+day, open, xloc = xloc.bar_time,bgcolor = boxCol, border_color = na, extend =extend.none , text =showTxt?"nwog >>"+formatDateFromTime(time):"", text_color = boxTxtCol, text_size = size.small, text_valign =txtValignChoice, text_halign = txtHalignChoice)
+    array.push(boxArr,bx)
+    if array.size(boxArr)>boxesToShow
+        box.delete(array.shift(boxArr))
+
+var line lnRthGapHigh = na
+var array<line> lnRthGapHighArr = array.new<line>(0)
+var line lnRthGapLow = na
+var array<line> lnRthGapLowArr = array.new<line>(0)
+
+var label labOrgHigh = na
+var array<label> labOrgHighArr = array.new<label>(0)
+var label labOrgLow = na
+var array<label> labOrgLowArr = array.new<label>(0)
+var label labOrgEq = na
+var array<label> labOrgEqArr = array.new<label>(0)
+var label labOrg25 = na
+var array<label> labOrg25Arr = array.new<label>(0)
+var label labOrg75 = na
+var array<label> labOrg75Arr = array.new<label>(0)
+var label labOrg125 = na
+var array<label> labOrg125Arr = array.new<label>(0)
+var label labOrg375 = na
+var array<label> labOrg375Arr = array.new<label>(0)
+var label labOrg625 = na
+var array<label> labOrg625Arr = array.new<label>(0)
+var label labOrg875 = na
+var array<label> labOrg875Arr = array.new<label>(0)
+
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showRthGapLines and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    color gapCol = useDayColors ? dayColor : rthGapCol
+    lnRthGapHigh := line.new(time, rthGapHigh, extendBoxRight?extended_time: time+day, rthGapHigh, xloc = xloc.bar_time, color = gapCol, style = rthGapStyle, width = rthGapWidth, extend = extend.none )
+    array.push(lnRthGapHighArr, lnRthGapHigh)
+    if array.size(lnRthGapHighArr) > boxesToShow
+        line.delete(array.shift(lnRthGapHighArr))
+    
+    lnRthGapLow := line.new(time, rthGapLow, extendBoxRight?extended_time: time+day, rthGapLow, xloc = xloc.bar_time, color = gapCol, style = rthGapStyle, width = rthGapWidth, extend = extend.none )
+    array.push(lnRthGapLowArr, lnRthGapLow)
+    if array.size(lnRthGapLowArr) > boxesToShow
+        line.delete(array.shift(lnRthGapLowArr))
+    
+    if showLabels
+        string dayStr = switch dow
+            2 => "Mon"
+            3 => "Tue"
+            4 => "Wed"
+            5 => "Thu"
+            6 => "Fri"
+            => ""
+        dStr = formatDateFromTime(time)
+        string dayAdd = showDayInLabel ? dayStr + " " : ""
+        color labCol = useDayColorsForLabels ? dayColor : labelColor
+        labOrgHigh := label.new(time, rthGapHigh, "NWOG HIGH " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrgHighArr, labOrgHigh)
+        if array.size(labOrgHighArr) > boxesToShow
+            label.delete(array.shift(labOrgHighArr))
+        
+        labOrgLow := label.new(time, rthGapLow, "NWOG LOW " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrgLowArr, labOrgLow)
+        if array.size(labOrgLowArr) > boxesToShow
+            label.delete(array.shift(labOrgLowArr))
+
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showRthMidline and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    string dayStr = switch dow
+        2 => "Mon"
+        3 => "Tue"
+        4 => "Wed"
+        5 => "Thu"
+        6 => "Fri"
+        => ""
+    color midCol = useDayColors ? dayColor : rthMidCol
+    lnRthMid:= line.new(time, rthMidVal, extendBoxRight?extended_time: time+day, rthMidVal, xloc = xloc.bar_time, color = midCol, style = rthMidStyle, width = 1, extend = extend.none )
+    array.push(lnRthMidArr, lnRthMid)
+    if array.size(lnRthMidArr)>boxesToShow
+        line.delete(array.shift(lnRthMidArr))
+    if showLabels and showMidlineLabels
+        dStr = formatDateFromTime(time)
+        string dayAdd = showDayInLabel ? dayStr + " " : ""
+        color labCol = useDayColorsForLabels ? dayColor : labelColor
+        labOrgEq := label.new(time, rthMidVal, "NWOG C.E. " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrgEqArr, labOrgEq)
+        if array.size(labOrgEqArr)>boxesToShow
+            label.delete(array.shift(labOrgEqArr))
+
+var line lnRth25 = na
+var array<line> lnRth25Arr = array.new<line>(0)
+var line lnRth75 = na
+var array<line> lnRth75Arr = array.new<line>(0)
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showRthQuartLines and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    string dayStr = switch dow
+        2 => "Mon"
+        3 => "Tue"
+        4 => "Wed"
+        5 => "Thu"
+        6 => "Fri"
+        => ""
+    color quartCol = useDayColors ? dayColor : rthQuartCol
+    lnRth25 := line.new(time, rth25Val, extendBoxRight?extended_time: time+day, rth25Val, xloc = xloc.bar_time, color = quartCol, style = rthQuartStyle, width = rthQuartWidth, extend = extend.none )
+    array.push(lnRth25Arr, lnRth25)
+    if array.size(lnRth25Arr) > boxesToShow
+        line.delete(array.shift(lnRth25Arr))
+    
+    lnRth75 := line.new(time, rth75Val, extendBoxRight?extended_time: time+day, rth75Val, xloc = xloc.bar_time, color = quartCol, style = rthQuartStyle, width = rthQuartWidth, extend = extend.none )
+    array.push(lnRth75Arr, lnRth75)
+    if array.size(lnRth75Arr) > boxesToShow
+        line.delete(array.shift(lnRth75Arr))
+    
+    if showLabels and showQuartileLabels
+        dStr = formatDateFromTime(time)
+        string dayAdd = showDayInLabel ? dayStr + " " : ""
+        color labCol = useDayColorsForLabels ? dayColor : labelColor
+        labOrg25 := label.new(time, rth25Val, ".25 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrg25Arr, labOrg25)
+        if array.size(labOrg25Arr) > boxesToShow
+            label.delete(array.shift(labOrg25Arr))
+        
+        labOrg75 := label.new(time, rth75Val, ".75 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrg75Arr, labOrg75)
+        if array.size(labOrg75Arr) > boxesToShow
+            label.delete(array.shift(labOrg75Arr))
+
+var line lnRth125 = na
+var array<line> lnRth125Arr = array.new<line>(0)
+var line lnRth375 = na
+var array<line> lnRth375Arr = array.new<line>(0)
+var line lnRth625 = na
+var array<line> lnRth625Arr = array.new<line>(0)
+var line lnRth875 = na
+var array<line> lnRth875Arr = array.new<line>(0)
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showRthEighthLines and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    string dayStr = switch dow
+        2 => "Mon"
+        3 => "Tue"
+        4 => "Wed"
+        5 => "Thu"
+        6 => "Fri"
+        => ""
+    color eighthCol = useDayColors ? dayColor : rthEighthCol
+    lnRth125 := line.new(time, rth125Val, extendBoxRight?extended_time: time+day, rth125Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+    array.push(lnRth125Arr, lnRth125)
+    if array.size(lnRth125Arr) > boxesToShow
+        line.delete(array.shift(lnRth125Arr))
+    
+    lnRth375 := line.new(time, rth375Val, extendBoxRight?extended_time: time+day, rth375Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+    array.push(lnRth375Arr, lnRth375)
+    if array.size(lnRth375Arr) > boxesToShow
+        line.delete(array.shift(lnRth375Arr))
+    
+    lnRth625 := line.new(time, rth625Val, extendBoxRight?extended_time: time+day, rth625Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+    array.push(lnRth625Arr, lnRth625)
+    if array.size(lnRth625Arr) > boxesToShow
+        line.delete(array.shift(lnRth625Arr))
+    
+    lnRth875 := line.new(time, rth875Val, extendBoxRight?extended_time: time+day, rth875Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+    array.push(lnRth875Arr, lnRth875)
+    if array.size(lnRth875Arr) > boxesToShow
+        line.delete(array.shift(lnRth875Arr))
+    
+    if showLabels and showEighthLabels
+        dStr = formatDateFromTime(time)
+        string dayAdd = showDayInLabel ? dayStr + " " : ""
+        color labCol = useDayColorsForLabels ? dayColor : labelColor
+        labOrg125 := label.new(time, rth125Val, ".125 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrg125Arr, labOrg125)
+        if array.size(labOrg125Arr) > boxesToShow
+            label.delete(array.shift(labOrg125Arr))
+        
+        labOrg375 := label.new(time, rth375Val, ".375 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrg375Arr, labOrg375)
+        if array.size(labOrg375Arr) > boxesToShow
+            label.delete(array.shift(labOrg375Arr))
+        
+        labOrg625 := label.new(time, rth625Val, ".625 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrg625Arr, labOrg625)
+        if array.size(labOrg625Arr) > boxesToShow
+            label.delete(array.shift(labOrg625Arr))
+        
+        labOrg875 := label.new(time, rth875Val, ".875 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        array.push(labOrg875Arr, labOrg875)
+        if array.size(labOrg875Arr) > boxesToShow
+            label.delete(array.shift(labOrg875Arr))
+
+// ==================== SPECIAL MONDAY & FRIDAY NWOGs ====================
+var array<line> monGapHighArr = array.new<line>(0)
+var array<line> monGapLowArr  = array.new<line>(0)
+var array<line> friGapHighArr = array.new<line>(0)
+var array<line> friGapLowArr  = array.new<line>(0)
+
+var array<label> monLabHighArr = array.new<label>(0)
+var array<label> monLabLowArr  = array.new<label>(0)
+var array<label> friLabHighArr = array.new<label>(0)
+var array<label> friLabLowArr  = array.new<label>(0)
+
+var array<line>  monMidArr = array.new<line>(0)
+var array<line>  friMidArr = array.new<line>(0)
+var array<label> monLabEqArr = array.new<label>(0)
+var array<label> friLabEqArr = array.new<label>(0)
+
+var array<line>  mon25Arr = array.new<line>(0)
+var array<line>  mon75Arr = array.new<line>(0)
+var array<line>  fri25Arr = array.new<line>(0)
+var array<line>  fri75Arr = array.new<line>(0)
+var array<label> monLab25Arr = array.new<label>(0)
+var array<label> monLab75Arr = array.new<label>(0)
+var array<label> friLab25Arr = array.new<label>(0)
+var array<label> friLab75Arr = array.new<label>(0)
+
+var array<line>  mon125Arr = array.new<line>(0)
+var array<line>  mon375Arr = array.new<line>(0)
+var array<line>  mon625Arr = array.new<line>(0)
+var array<line>  mon875Arr = array.new<line>(0)
+var array<line>  fri125Arr = array.new<line>(0)
+var array<line>  fri375Arr = array.new<line>(0)
+var array<line>  fri625Arr = array.new<line>(0)
+var array<line>  fri875Arr = array.new<line>(0)
+var array<label> monLab125Arr = array.new<label>(0)
+var array<label> monLab375Arr = array.new<label>(0)
+var array<label> monLab625Arr = array.new<label>(0)
+var array<label> monLab875Arr = array.new<label>(0)
+var array<label> friLab125Arr = array.new<label>(0)
+var array<label> friLab375Arr = array.new<label>(0)
+var array<label> friLab625Arr = array.new<label>(0)
+var array<label> friLab875Arr = array.new<label>(0)
+
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showSpecialORGs and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    if dow == 2 or dow == 6
+        color dayColor = switch dow
+            2 => monColor
+            6 => friColor
+            => color.gray
+        color gapCol = useDayColors ? dayColor : rthGapCol
+        
+        line spLnHigh = line.new(time, rthGapHigh, extendBoxRight?extended_time: time+day, rthGapHigh, xloc = xloc.bar_time, color = gapCol, style = rthGapStyle, width = rthGapWidth, extend = extend.none )
+        line spLnLow  = line.new(time, rthGapLow , extendBoxRight?extended_time: time+day, rthGapLow , xloc = xloc.bar_time, color = gapCol, style = rthGapStyle, width = rthGapWidth, extend = extend.none )
+        
+        label spLabHigh = na
+        label spLabLow  = na
+        if showLabels
+            string dayStr = dow == 2 ? "Mon" : "Fri"
+            dStr = formatDateFromTime(time)
+            string dayAdd = showDayInLabel ? dayStr + " " : ""
+            color labCol = useDayColorsForLabels ? dayColor : labelColor
+            spLabHigh := label.new(time, rthGapHigh, "NWOG HIGH " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+            spLabLow  := label.new(time, rthGapLow , "NWOG LOW "  + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        
+        if dow == 2
+            array.push(monGapHighArr, spLnHigh)
+            array.push(monGapLowArr , spLnLow)
+            if showLabels
+                array.push(monLabHighArr, spLabHigh)
+                array.push(monLabLowArr , spLabLow)
+            if array.size(monGapHighArr) > 2
+                line.delete(array.shift(monGapHighArr))
+                line.delete(array.shift(monGapLowArr))
+                if showLabels
+                    label.delete(array.shift(monLabHighArr))
+                    label.delete(array.shift(monLabLowArr))
+        else
+            array.push(friGapHighArr, spLnHigh)
+            array.push(friGapLowArr , spLnLow)
+            if showLabels
+                array.push(friLabHighArr, spLabHigh)
+                array.push(friLabLowArr , spLabLow)
+            if array.size(friGapHighArr) > 2
+                line.delete(array.shift(friGapHighArr))
+                line.delete(array.shift(friGapLowArr))
+                if showLabels
+                    label.delete(array.shift(friLabHighArr))
+                    label.delete(array.shift(friLabLowArr))
+        
+        if showRthMidline
+            color midCol = useDayColors ? dayColor : rthMidCol
+            line spMid = line.new(time, rthMidVal, extendBoxRight?extended_time: time+day, rthMidVal, xloc = xloc.bar_time, color = midCol, style = rthMidStyle, width = 1, extend = extend.none )
+            label spLabEq = na
+            if showLabels and showMidlineLabels
+                string dayStr = dow == 2 ? "Mon" : "Fri"
+                dStr = formatDateFromTime(time)
+                string dayAdd = showDayInLabel ? dayStr + " " : ""
+                color labCol = useDayColorsForLabels ? dayColor : labelColor
+                spLabEq := label.new(time, rthMidVal, "NWOG C.E. " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+            if dow == 2
+                array.push(monMidArr, spMid)
+                if showLabels and showMidlineLabels
+                    array.push(monLabEqArr, spLabEq)
+                if array.size(monMidArr) > 2
+                    line.delete(array.shift(monMidArr))
+                    if showLabels and showMidlineLabels
+                        label.delete(array.shift(monLabEqArr))
+            else
+                array.push(friMidArr, spMid)
+                if showLabels and showMidlineLabels
+                    array.push(friLabEqArr, spLabEq)
+                if array.size(friMidArr) > 2
+                    line.delete(array.shift(friMidArr))
+                    if showLabels and showMidlineLabels
+                        label.delete(array.shift(friLabEqArr))
+        
+        if showRthQuartLines
+            color quartCol = useDayColors ? dayColor : rthQuartCol
+            line sp25 = line.new(time, rth25Val, extendBoxRight?extended_time: time+day, rth25Val, xloc = xloc.bar_time, color = quartCol, style = rthQuartStyle, width = rthQuartWidth, extend = extend.none )
+            line sp75 = line.new(time, rth75Val, extendBoxRight?extended_time: time+day, rth75Val, xloc = xloc.bar_time, color = quartCol, style = rthQuartStyle, width = rthQuartWidth, extend = extend.none )
+            label spLab25 = na
+            label spLab75 = na
+            if showLabels and showQuartileLabels
+                string dayStr = dow == 2 ? "Mon" : "Fri"
+                dStr = formatDateFromTime(time)
+                string dayAdd = showDayInLabel ? dayStr + " " : ""
+                color labCol = useDayColorsForLabels ? dayColor : labelColor
+                spLab25 := label.new(time, rth25Val, ".25 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+                spLab75 := label.new(time, rth75Val, ".75 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+            if dow == 2
+                array.push(mon25Arr, sp25)
+                array.push(mon75Arr, sp75)
+                if showLabels and showQuartileLabels
+                    array.push(monLab25Arr, spLab25)
+                    array.push(monLab75Arr, spLab75)
+                if array.size(mon25Arr) > 2
+                    line.delete(array.shift(mon25Arr))
+                    line.delete(array.shift(mon75Arr))
+                    if showLabels and showQuartileLabels
+                        label.delete(array.shift(monLab25Arr))
+                        label.delete(array.shift(monLab75Arr))
+            else
+                array.push(fri25Arr, sp25)
+                array.push(fri75Arr, sp75)
+                if showLabels and showQuartileLabels
+                    array.push(friLab25Arr, spLab25)
+                    array.push(friLab75Arr, spLab75)
+                if array.size(fri25Arr) > 2
+                    line.delete(array.shift(fri25Arr))
+                    line.delete(array.shift(fri75Arr))
+                    if showLabels and showQuartileLabels
+                        label.delete(array.shift(friLab25Arr))
+                        label.delete(array.shift(friLab75Arr))
+        
+        if showRthEighthLines
+            color eighthCol = useDayColors ? dayColor : rthEighthCol
+            line sp125 = line.new(time, rth125Val, extendBoxRight?extended_time: time+day, rth125Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+            line sp375 = line.new(time, rth375Val, extendBoxRight?extended_time: time+day, rth375Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+            line sp625 = line.new(time, rth625Val, extendBoxRight?extended_time: time+day, rth625Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+            line sp875 = line.new(time, rth875Val, extendBoxRight?extended_time: time+day, rth875Val, xloc = xloc.bar_time, color = eighthCol, style = rthEighthStyle, width = rthEighthWidth, extend = extend.none )
+            label spLab125 = na
+            label spLab375 = na
+            label spLab625 = na
+            label spLab875 = na
+            if showLabels and showEighthLabels
+                string dayStr = dow == 2 ? "Mon" : "Fri"
+                dStr = formatDateFromTime(time)
+                string dayAdd = showDayInLabel ? dayStr + " " : ""
+                color labCol = useDayColorsForLabels ? dayColor : labelColor
+                spLab125 := label.new(time, rth125Val, ".125 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+                spLab375 := label.new(time, rth375Val, ".375 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+                spLab625 := label.new(time, rth625Val, ".625 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+                spLab875 := label.new(time, rth875Val, ".875 " + dayAdd + dStr, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=labCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+            if dow == 2
+                array.push(mon125Arr, sp125)
+                array.push(mon375Arr, sp375)
+                array.push(mon625Arr, sp625)
+                array.push(mon875Arr, sp875)
+                if showLabels and showEighthLabels
+                    array.push(monLab125Arr, spLab125)
+                    array.push(monLab375Arr, spLab375)
+                    array.push(monLab625Arr, spLab625)
+                    array.push(monLab875Arr, spLab875)
+                if array.size(mon125Arr) > 2
+                    line.delete(array.shift(mon125Arr))
+                    line.delete(array.shift(mon375Arr))
+                    line.delete(array.shift(mon625Arr))
+                    line.delete(array.shift(mon875Arr))
+                    if showLabels and showEighthLabels
+                        label.delete(array.shift(monLab125Arr))
+                        label.delete(array.shift(monLab375Arr))
+                        label.delete(array.shift(monLab625Arr))
+                        label.delete(array.shift(monLab875Arr))
+            else
+                array.push(fri125Arr, sp125)
+                array.push(fri375Arr, sp375)
+                array.push(fri625Arr, sp625)
+                array.push(fri875Arr, sp875)
+                if showLabels and showEighthLabels
+                    array.push(friLab125Arr, spLab125)
+                    array.push(friLab375Arr, spLab375)
+                    array.push(friLab625Arr, spLab625)
+                    array.push(friLab875Arr, spLab875)
+                if array.size(fri125Arr) > 2
+                    line.delete(array.shift(fri125Arr))
+                    line.delete(array.shift(fri375Arr))
+                    line.delete(array.shift(fri625Arr))
+                    line.delete(array.shift(fri875Arr))
+                    if showLabels and showEighthLabels
+                        label.delete(array.shift(friLab125Arr))
+                        label.delete(array.shift(friLab375Arr))
+                        label.delete(array.shift(friLab625Arr))
+                        label.delete(array.shift(friLab875Arr))
+
+// Premium/Discount calculation
+int pdN = useHistoricalCount ? boxesToShow : pdGaps
+var array<float> recentGapHighs = array.new<float>(0)
+var array<float> recentGapLows = array.new<float>(0)
+var array<int> recentGapTimes = array.new<int>(0)
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1
+    array.push(recentGapHighs, rthGapHigh)
+    array.push(recentGapLows, rthGapLow)
+    array.push(recentGapTimes, time)
+    if array.size(recentGapHighs) > pdN
+        array.shift(recentGapHighs)
+        array.shift(recentGapLows)
+        array.shift(recentGapTimes)
+
+var table pdTable = table.new(getTablePosition(pdTablePosition), 1, 1, bgcolor = color.gray, border_width = 1, border_color = color.black)
+if (showPDTable or onlyShowPD) and not onlyShowFVG and array.size(recentGapHighs) > 0 and show_indicator
+    float pdHH = array.max(recentGapHighs)
+    float pdLL = array.min(recentGapLows)
+    float pdRange = pdHH - pdLL
+    float pdMid = pdLL + pdRange * 0.5
+    float pdPercent = pdRange != 0 ? (close - pdMid) / (pdRange / 2) * 100 : na
+    string pdStatus = pdPercent > 0 ? "Premium" : "Discount"
+    color pdBg = pdPercent > 0 ? color.green : color.red
+    string pdDisplay = switch pdDisplayMode
+        "Status" => pdStatus
+        "Percentage" => str.tostring(math.abs(pdPercent), "#.#") + "%"
+        "Both" => pdStatus + " (" + str.tostring(math.abs(pdPercent), "#.#") + "%)"
+    table.cell(pdTable, 0, 0, pdDisplay, text_color = color.white, bgcolor = pdBg, text_size = getLabelSize(pdTableSize))
+
+// ==================== PD FULL GRADIENT LEVELS ====================
+var line pdLnHigh = na
+var line pdLnLow  = na
+var line pdLnMid  = na
+var line pdLn25   = na
+var line pdLn75   = na
+var line pdLn125  = na
+var line pdLn375  = na
+var line pdLn625  = na
+var line pdLn875  = na
+
+var label pdLabHigh = na
+var label pdLabLow  = na
+var label pdLabMid  = na
+var label pdLab25   = na
+var label pdLab75   = na
+var label pdLab125  = na
+var label pdLab375  = na
+var label pdLab625  = na
+var label pdLab875  = na
+
+if array.size(recentGapHighs) > 0 and (showPDGradients or onlyShowPD) and not onlyShowFVG and show_indicator
+    float pdHH = array.max(recentGapHighs)
+    float pdLL = array.min(recentGapLows)
+    float pdRange = pdHH - pdLL
+    float pdHigh = pdHH
+    float pdLow  = pdLL
+    float pdMid  = pdLL + pdRange * 0.5
+    float pd25   = pdLL + 0.25 * pdRange
+    float pd75   = pdLL + 0.75 * pdRange
+    float pd125  = pdLL + 0.125 * pdRange
+    float pd375  = pdLL + 0.375 * pdRange
+    float pd625  = pdLL + 0.625 * pdRange
+    float pd875  = pdLL + 0.875 * pdRange
+    int start_time = array.get(recentGapTimes, 0)
+
+    if na(pdLnHigh)
+        pdLnHigh := line.new(start_time, pdHigh, extended_time, pdHigh, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth + 1)
+    else
+        line.set_y1(pdLnHigh, pdHigh)
+        line.set_y2(pdLnHigh, pdHigh)
+        line.set_x1(pdLnHigh, start_time)
+        line.set_x2(pdLnHigh, extended_time)
+
+    if na(pdLnLow)
+        pdLnLow := line.new(start_time, pdLow, extended_time, pdLow, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth + 1)
+    else
+        line.set_y1(pdLnLow, pdLow)
+        line.set_y2(pdLnLow, pdLow)
+        line.set_x1(pdLnLow, start_time)
+        line.set_x2(pdLnLow, extended_time)
+
+    if na(pdLnMid)
+        pdLnMid := line.new(start_time, pdMid, extended_time, pdMid, xloc = xloc.bar_time, color = pdEighthCol, style = line.style_dashed, width = pdEighthWidth)
+    else
+        line.set_y1(pdLnMid, pdMid)
+        line.set_y2(pdLnMid, pdMid)
+        line.set_x1(pdLnMid, start_time)
+        line.set_x2(pdLnMid, extended_time)
+
+    if na(pdLn25)
+        pdLn25 := line.new(start_time, pd25, extended_time, pd25, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth)
+    else
+        line.set_y1(pdLn25, pd25)
+        line.set_y2(pdLn25, pd25)
+        line.set_x1(pdLn25, start_time)
+        line.set_x2(pdLn25, extended_time)
+
+    if na(pdLn75)
+        pdLn75 := line.new(start_time, pd75, extended_time, pd75, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth)
+    else
+        line.set_y1(pdLn75, pd75)
+        line.set_y2(pdLn75, pd75)
+        line.set_x1(pdLn75, start_time)
+        line.set_x2(pdLn75, extended_time)
+
+    if na(pdLn125)
+        pdLn125 := line.new(start_time, pd125, extended_time, pd125, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth)
+    else
+        line.set_y1(pdLn125, pd125)
+        line.set_y2(pdLn125, pd125)
+        line.set_x1(pdLn125, start_time)
+        line.set_x2(pdLn125, extended_time)
+
+    if na(pdLn375)
+        pdLn375 := line.new(start_time, pd375, extended_time, pd375, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth)
+    else
+        line.set_y1(pdLn375, pd375)
+        line.set_y2(pdLn375, pd375)
+        line.set_x1(pdLn375, start_time)
+        line.set_x2(pdLn375, extended_time)
+
+    if na(pdLn625)
+        pdLn625 := line.new(start_time, pd625, extended_time, pd625, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth)
+    else
+        line.set_y1(pdLn625, pd625)
+        line.set_y2(pdLn625, pd625)
+        line.set_x1(pdLn625, start_time)
+        line.set_x2(pdLn625, extended_time)
+
+    if na(pdLn875)
+        pdLn875 := line.new(start_time, pd875, extended_time, pd875, xloc = xloc.bar_time, color = pdEighthCol, style = pdEighthStyle, width = pdEighthWidth)
+    else
+        line.set_y1(pdLn875, pd875)
+        line.set_y2(pdLn875, pd875)
+        line.set_x1(pdLn875, start_time)
+        line.set_x2(pdLn875, extended_time)
+
+    if showPDEighthLabels
+        if na(pdLabHigh)
+            pdLabHigh := label.new(start_time, pdHigh, "PD HIGH", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLabHigh, start_time, pdHigh)
+
+        if na(pdLabLow)
+            pdLabLow := label.new(start_time, pdLow, "PD LOW", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLabLow, start_time, pdLow)
+
+        if na(pdLabMid)
+            pdLabMid := label.new(start_time, pdMid, "PD C.E.", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLabMid, start_time, pdMid)
+
+        if na(pdLab25)
+            pdLab25 := label.new(start_time, pd25, "PD .25", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLab25, start_time, pd25)
+
+        if na(pdLab75)
+            pdLab75 := label.new(start_time, pd75, "PD .75", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLab75, start_time, pd75)
+
+        if na(pdLab125)
+            pdLab125 := label.new(start_time, pd125, "PD .125", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLab125, start_time, pd125)
+
+        if na(pdLab375)
+            pdLab375 := label.new(start_time, pd375, "PD .375", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLab375, start_time, pd375)
+
+        if na(pdLab625)
+            pdLab625 := label.new(start_time, pd625, "PD .625", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLab625, start_time, pd625)
+
+        if na(pdLab875)
+            pdLab875 := label.new(start_time, pd875, "PD .875", xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), textcolor=pdEighthCol, style=label.style_label_left, size=getLabelSize(labelSizeIn))
+        else
+            label.set_xy(pdLab875, start_time, pd875)
+
+// ==================== HISTORICAL NWOG LEVELS STORAGE ====================
+type orgLevels
+    int   openTime
+    float gapHigh
+    float gapLow
+    float mid
+    float q25
+    float q75
+    float e125
+    float e375
+    float e625
+    float e875
+
+var array<orgLevels> historicalORGs = array.new<orgLevels>()
+
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and show_indicator
+    org = orgLevels.new()
+    org.openTime := time
+    org.gapHigh  := rthGapHigh
+    org.gapLow   := rthGapLow
+    org.mid      := rthMidVal
+    org.q25      := rth25Val
+    org.q75      := rth75Val
+    org.e125     := rth125Val
+    org.e375     := rth375Val
+    org.e625     := rth625Val
+    org.e875     := rth875Val
+    array.push(historicalORGs, org)
+    if array.size(historicalORGs) > boxesToShow
+        array.shift(historicalORGs)
+
+// ==================== STRICT WICK-GAP + VOLUME IMBALANCE FVG DETECTION ====================
+detectFvg() =>
+    float minGap = minFvgSize * syminfo.mintick
+    bool bullGap = low > high[2] and (low - high[2]) >= minGap
+    bool bearGap = high < low[2] and (low[2] - high) >= minGap
+    float fvgTop = na
+    float fvgBot = na
+    bool isBull = false
+
+    if bullGap
+        fvgTop := low
+        fvgBot := high[2]
+        float body2Top = math.max(close[2], open[2])
+        float body1Bot = math.min(close[1], open[1])
+        float body1Top = math.max(close[1], open[1])
+        float body0Bot = math.min(close, open)
+        if body2Top < body1Bot
+            fvgBot := body2Top
+        if body1Top < body0Bot
+            fvgTop := body0Bot
+        isBull := true
+    else if bearGap
+        fvgTop := low[2]
+        fvgBot := high
+        float body2Bot = math.min(close[2], open[2])
+        float body1Top = math.max(close[1], open[1])
+        float body1Bot = math.min(close[1], open[1])
+        float body0Top = math.max(close, open)
+        if body2Bot > body1Top
+            fvgTop := body2Bot
+        if body1Bot > body0Top
+            fvgBot := body0Top
+        isBull := false
+
+    [bullGap or bearGap, isBull, fvgTop, fvgBot]
+
+[boolFVG, isBullFVG, fTop, fBot] = detectFvg()
+
+// Overlap with past NWOG gradients only
+overlap = false
+if boolFVG
+    fvgTime = time[2]
+    for org in historicalORGs
+        if org.openTime < fvgTime
+            levels = array.from(org.gapHigh, org.gapLow, org.mid, org.q25, org.q75, org.e125, org.e375, org.e625, org.e875)
+            for p in levels
+                if p >= math.min(fTop, fBot) and p <= math.max(fTop, fBot)
+                    overlap := true
+                    break
+            if overlap
+                break
+
+if (show_FVG or onlyShowFVG) and boolFVG and overlap and show_indicator
+    bgcolor = isBullFVG ? col_FVG_bull : col_FVG_bear
+    leftBar = bar_index - 2
+    rightBar = bar_index + ext_bx_FVG
+    boxTop = math.max(fTop, fBot)
+    boxBot = math.min(fTop, fBot)
+    box.new(leftBar, boxTop, rightBar, boxBot, bgcolor = bgcolor, border_color = color.new(color.white, 70), xloc = xloc.bar_index)
+    if show_midline
+        mid = (boxTop + boxBot) / 2
+        style = midline_style == 'Dashed' ? line.style_dashed : midline_style == 'Dotted' ? line.style_dotted : line.style_solid
+        line.new(leftBar, mid, rightBar, mid, color = col_FVG_mid, style = style, xloc = xloc.bar_index)
+
+// ==================== HI/LO BOX, FRIDAY 5PM CLOSE ====================
+four15Hi = ta.valuewhen(dayofweek == 6 and time_close == _17_00 + closeOffset*_minute, high, 0)
+four15Lo = ta.valuewhen(dayofweek == 6 and time_close == _17_00 + closeOffset*_minute, low, 0)
+four15HiLo = low>four15Hi?four15Hi:high<four15Lo?four15Lo:na
+HiLo = low>four15Hi? low:high<four15Lo?high:na
+var box bx2 = na
+var array<box> boxArr2 = array.new<box>(0)
+var line lnHiLoMid = na
+var array<line> lnHiLoMidArr = array.new<line>(0)
+HiLoMidVal = math.min(four15HiLo, HiLo) + 0.5* math.abs(four15HiLo-HiLo)
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showHiLoBox and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    color boxCol2 = useDayColors ? color.new(dayColor, 90) : boxColor2
+    bx2:=box.new(time, four15HiLo, extendBoxRight?extended_time: time+day,HiLo, xloc = xloc.bar_time,bgcolor = boxCol2, border_color = borderColor2, extend = extend.none , text =showTxt?"hilo >>"+formatDateFromTime(time):"", text_color = boxTxtCol, text_size = size.small, text_valign =txtValignChoice, text_halign = txtHalignChoice)
+    array.push(boxArr2,bx2)
+    if array.size(boxArr2)>boxesToShow
+        box.delete(array.shift(boxArr2))
+if time == (_18_00 +openOffset *_minute) and dayofweek(time) == 1 and showHiLoMidline and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    color hiLoMidC = useDayColors ? dayColor : HiLoMidCol
+    lnHiLoMid:= line.new(time, HiLoMidVal, extendBoxRight?extended_time: time+day, HiLoMidVal, xloc = xloc.bar_time, color = hiLoMidC, style = HiLoMidStyle, width = 1, extend = extend.none)
+    array.push(lnHiLoMidArr, lnHiLoMid)
+    if array.size(lnHiLoMidArr)>boxesToShow
+        line.delete(array.shift(lnHiLoMidArr))
+
+var line lineRTH = na
+var array<line> lineArr = array.new<line>(0)
+condRTHclose = (dayofweek == 6 and time_close == _17_00 + closeOffset *_minute)
+if condRTHclose and showOrgVisuals and show_indicator
+    int dow = dayofweek(time)
+    color dayColor = switch dow
+        2 => monColor
+        3 => tueColor
+        4 => wedColor
+        5 => thuColor
+        6 => friColor
+        => color.gray
+    color lineCol = showRTHcloseLine ? (useDayColors ? dayColor : RTHcloseColor) : colorNone
+    lineRTH:=line.new(time_close,close, extendLineRight?extended_time:time+longDay, close , xloc=xloc.bar_time, color = lineCol, extend =extend.none , style=linestyleRTH, width =RTH_line_width)
+    array.push(lineArr,lineRTH)
+    
+    if array.size(lineArr)>linesToShow
+        line.delete(array.shift(lineArr))
+
+if inSession1
+    t1+=barTime
+if not inSession1 and inSession1[1]
+    t1:=0
+
+update_time = useNoPlotSession ? extended_time - t1 : extended_time
+
+if extendBoxRight and show_indicator
+    if boxArr.size()>0 and showOrgVisuals
+        for i = boxArr.size()-1 to 0
+            box.set_right(boxArr.get(i), update_time)
+    if boxArr2.size()>0 and showOrgVisuals
+        for i = boxArr2.size()-1 to 0
+            box.set_right(boxArr2.get(i), update_time)
+    if lnRthMidArr.size()>0 and showOrgVisuals
+        for i = lnRthMidArr.size()-1 to 0
+            line.set_x2(lnRthMidArr.get(i), update_time)
+    if lnHiLoMidArr.size()>0 and showOrgVisuals
+        for i = lnHiLoMidArr.size()-1 to 0
+            line.set_x2(lnHiLoMidArr.get(i), update_time)
+    if lnRth25Arr.size()>0 and showOrgVisuals
+        for i = lnRth25Arr.size()-1 to 0
+            line.set_x2(lnRth25Arr.get(i), update_time)
+    if lnRth75Arr.size()>0 and showOrgVisuals
+        for i = lnRth75Arr.size()-1 to 0
+            line.set_x2(lnRth75Arr.get(i), update_time)
+    if lnRth125Arr.size()>0 and showOrgVisuals
+        for i = lnRth125Arr.size()-1 to 0
+            line.set_x2(lnRth125Arr.get(i), update_time)
+    if lnRth375Arr.size()>0 and showOrgVisuals
+        for i = lnRth375Arr.size()-1 to 0
+            line.set_x2(lnRth375Arr.get(i), update_time)
+    if lnRth625Arr.size()>0 and showOrgVisuals
+        for i = lnRth625Arr.size()-1 to 0
+            line.set_x2(lnRth625Arr.get(i), update_time)
+    if lnRth875Arr.size()>0 and showOrgVisuals
+        for i = lnRth875Arr.size()-1 to 0
+            line.set_x2(lnRth875Arr.get(i), update_time)
+    if lnRthGapHighArr.size()>0 and showOrgVisuals
+        for i = lnRthGapHighArr.size()-1 to 0
+            line.set_x2(lnRthGapHighArr.get(i), update_time)
+    if lnRthGapLowArr.size()>0 and showOrgVisuals
+        for i = lnRthGapLowArr.size()-1 to 0
+            line.set_x2(lnRthGapLowArr.get(i), update_time)
+    if labOrgHighArr.size()>0 and showOrgVisuals
+        for i = labOrgHighArr.size()-1 to 0
+            label.set_x(labOrgHighArr.get(i), update_time)
+    if labOrgLowArr.size()>0 and showOrgVisuals
+        for i = labOrgLowArr.size()-1 to 0
+            label.set_x(labOrgLowArr.get(i), update_time)
+    if labOrgEqArr.size()>0 and showOrgVisuals
+        for i = labOrgEqArr.size()-1 to 0
+            label.set_x(labOrgEqArr.get(i), update_time)
+    if labOrg25Arr.size()>0 and showOrgVisuals
+        for i = labOrg25Arr.size()-1 to 0
+            label.set_x(labOrg25Arr.get(i), update_time)
+    if labOrg75Arr.size()>0 and showOrgVisuals
+        for i = labOrg75Arr.size()-1 to 0
+            label.set_x(labOrg75Arr.get(i), update_time)
+    if labOrg125Arr.size()>0 and showOrgVisuals
+        for i = labOrg125Arr.size()-1 to 0
+            label.set_x(labOrg125Arr.get(i), update_time)
+    if labOrg375Arr.size()>0 and showOrgVisuals
+        for i = labOrg375Arr.size()-1 to 0
+            label.set_x(labOrg375Arr.get(i), update_time)
+    if labOrg625Arr.size()>0 and showOrgVisuals
+        for i = labOrg625Arr.size()-1 to 0
+            label.set_x(labOrg625Arr.get(i), update_time)
+    if labOrg875Arr.size()>0 and showOrgVisuals
+        for i = labOrg875Arr.size()-1 to 0
+            label.set_x(labOrg875Arr.get(i), update_time)
+    
+    if monGapHighArr.size() > 0 and showOrgVisuals
+        for i = monGapHighArr.size()-1 to 0
+            line.set_x2(monGapHighArr.get(i), update_time)
+    if monGapLowArr.size() > 0 and showOrgVisuals
+        for i = monGapLowArr.size()-1 to 0
+            line.set_x2(monGapLowArr.get(i), update_time)
+    if friGapHighArr.size() > 0 and showOrgVisuals
+        for i = friGapHighArr.size()-1 to 0
+            line.set_x2(friGapHighArr.get(i), update_time)
+    if friGapLowArr.size() > 0 and showOrgVisuals
+        for i = friGapLowArr.size()-1 to 0
+            line.set_x2(friGapLowArr.get(i), update_time)
+    
+    if monMidArr.size() > 0 and showOrgVisuals
+        for i = monMidArr.size()-1 to 0
+            line.set_x2(monMidArr.get(i), update_time)
+    if friMidArr.size() > 0 and showOrgVisuals
+        for i = friMidArr.size()-1 to 0
+            line.set_x2(friMidArr.get(i), update_time)
+    if mon25Arr.size() > 0 and showOrgVisuals
+        for i = mon25Arr.size()-1 to 0
+            line.set_x2(mon25Arr.get(i), update_time)
+    if mon75Arr.size() > 0 and showOrgVisuals
+        for i = mon75Arr.size()-1 to 0
+            line.set_x2(mon75Arr.get(i), update_time)
+    if fri25Arr.size() > 0 and showOrgVisuals
+        for i = fri25Arr.size()-1 to 0
+            line.set_x2(fri25Arr.get(i), update_time)
+    if fri75Arr.size() > 0 and showOrgVisuals
+        for i = fri75Arr.size()-1 to 0
+            line.set_x2(fri75Arr.get(i), update_time)
+    if mon125Arr.size() > 0 and showOrgVisuals
+        for i = mon125Arr.size()-1 to 0
+            line.set_x2(mon125Arr.get(i), update_time)
+    if mon375Arr.size() > 0 and showOrgVisuals
+        for i = mon375Arr.size()-1 to 0
+            line.set_x2(mon375Arr.get(i), update_time)
+    if mon625Arr.size() > 0 and showOrgVisuals
+        for i = mon625Arr.size()-1 to 0
+            line.set_x2(mon625Arr.get(i), update_time)
+    if mon875Arr.size() > 0 and showOrgVisuals
+        for i = mon875Arr.size()-1 to 0
+            line.set_x2(mon875Arr.get(i), update_time)
+    if fri125Arr.size() > 0 and showOrgVisuals
+        for i = fri125Arr.size()-1 to 0
+            line.set_x2(fri125Arr.get(i), update_time)
+    if fri375Arr.size() > 0 and showOrgVisuals
+        for i = fri375Arr.size()-1 to 0
+            line.set_x2(fri375Arr.get(i), update_time)
+    if fri625Arr.size() > 0 and showOrgVisuals
+        for i = fri625Arr.size()-1 to 0
+            line.set_x2(fri625Arr.get(i), update_time)
+    if fri875Arr.size() > 0 and showOrgVisuals
+        for i = fri875Arr.size()-1 to 0
+            line.set_x2(fri875Arr.get(i), update_time)
+    
+    if monLabHighArr.size() > 0 and showOrgVisuals
+        for i = monLabHighArr.size()-1 to 0
+            label.set_x(monLabHighArr.get(i), update_time)
+    if monLabLowArr.size() > 0 and showOrgVisuals
+        for i = monLabLowArr.size()-1 to 0
+            label.set_x(monLabLowArr.get(i), update_time)
+    if friLabHighArr.size() > 0 and showOrgVisuals
+        for i = friLabHighArr.size()-1 to 0
+            label.set_x(friLabHighArr.get(i), update_time)
+    if friLabLowArr.size() > 0 and showOrgVisuals
+        for i = friLabLowArr.size()-1 to 0
+            label.set_x(friLabLowArr.get(i), update_time)
+    if monLabEqArr.size() > 0 and showOrgVisuals
+        for i = monLabEqArr.size()-1 to 0
+            label.set_x(monLabEqArr.get(i), update_time)
+    if friLabEqArr.size() > 0 and showOrgVisuals
+        for i = friLabEqArr.size()-1 to 0
+            label.set_x(friLabEqArr.get(i), update_time)
+    if monLab25Arr.size() > 0 and showOrgVisuals
+        for i = monLab25Arr.size()-1 to 0
+            label.set_x(monLab25Arr.get(i), update_time)
+    if monLab75Arr.size() > 0 and showOrgVisuals
+        for i = monLab75Arr.size()-1 to 0
+            label.set_x(monLab75Arr.get(i), update_time)
+    if friLab25Arr.size() > 0 and showOrgVisuals
+        for i = friLab25Arr.size()-1 to 0
+            label.set_x(friLab25Arr.get(i), update_time)
+    if friLab75Arr.size() > 0 and showOrgVisuals
+        for i = friLab75Arr.size()-1 to 0
+            label.set_x(friLab75Arr.get(i), update_time)
+    if monLab125Arr.size() > 0 and showOrgVisuals
+        for i = monLab125Arr.size()-1 to 0
+            label.set_x(monLab125Arr.get(i), update_time)
+    if monLab375Arr.size() > 0 and showOrgVisuals
+        for i = monLab375Arr.size()-1 to 0
+            label.set_x(monLab375Arr.get(i), update_time)
+    if monLab625Arr.size() > 0 and showOrgVisuals
+        for i = monLab625Arr.size()-1 to 0
+            label.set_x(monLab625Arr.get(i), update_time)
+    if monLab875Arr.size() > 0 and showOrgVisuals
+        for i = monLab875Arr.size()-1 to 0
+            label.set_x(monLab875Arr.get(i), update_time)
+    if friLab125Arr.size() > 0 and showOrgVisuals
+        for i = friLab125Arr.size()-1 to 0
+            label.set_x(friLab125Arr.get(i), update_time)
+    if friLab375Arr.size() > 0 and showOrgVisuals
+        for i = friLab375Arr.size()-1 to 0
+            label.set_x(friLab375Arr.get(i), update_time)
+    if friLab625Arr.size() > 0 and showOrgVisuals
+        for i = friLab625Arr.size()-1 to 0
+            label.set_x(friLab625Arr.get(i), update_time)
+    if friLab875Arr.size() > 0 and showOrgVisuals
+        for i = friLab875Arr.size()-1 to 0
+            label.set_x(friLab875Arr.get(i), update_time)
+
+    // PD lines & labels extension (always extend even when onlyShowFVG=true, but they are never created when onlyShowFVG is on)
+    if not na(pdLnHigh)
+        line.set_x2(pdLnHigh, update_time)
+    if not na(pdLnLow)
+        line.set_x2(pdLnLow, update_time)
+    if not na(pdLnMid)
+        line.set_x2(pdLnMid, update_time)
+    if not na(pdLn25)
+        line.set_x2(pdLn25, update_time)
+    if not na(pdLn75)
+        line.set_x2(pdLn75, update_time)
+    if not na(pdLn125)
+        line.set_x2(pdLn125, update_time)
+    if not na(pdLn375)
+        line.set_x2(pdLn375, update_time)
+    if not na(pdLn625)
+        line.set_x2(pdLn625, update_time)
+    if not na(pdLn875)
+        line.set_x2(pdLn875, update_time)
+    if not na(pdLabHigh)
+        label.set_x(pdLabHigh, update_time)
+    if not na(pdLabLow)
+        label.set_x(pdLabLow, update_time)
+    if not na(pdLabMid)
+        label.set_x(pdLabMid, update_time)
+    if not na(pdLab25)
+        label.set_x(pdLab25, update_time)
+    if not na(pdLab75)
+        label.set_x(pdLab75, update_time)
+    if not na(pdLab125)
+        label.set_x(pdLab125, update_time)
+    if not na(pdLab375)
+        label.set_x(pdLab375, update_time)
+    if not na(pdLab625)
+        label.set_x(pdLab625, update_time)
+    if not na(pdLab875)
+        label.set_x(pdLab875, update_time)
+
+if extendLineRight and showOrgVisuals and show_indicator
+    if lineArr.size()>0
+        for i = lineArr.size()-1 to 0
+            line.set_x2(lineArr.get(i), update_time)
